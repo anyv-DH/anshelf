@@ -90,14 +90,6 @@ Annotate 'audio-library.png' 'annotated-audio.png' {
   Add-Callout $g 3 '拖出音频副本' 560 475 700 530 250
 }
 
-Annotate 'select-and-paste.png' 'annotated-selection-details.png' {
-  param($g,$w,$h)
-  Add-Callout $g 1 '选中素材' 600 500 235 325 180
-  Add-Callout $g 2 '批量选择分类' 540 350 315 280 220
-  Add-Callout $g 3 '发送到 AN' 865 350 735 280 190
-  Add-Callout $g 4 '按需打开详情' 1180 450 980 520 220
-}
-
 Annotate 'category-navigation.png' 'annotated-category.png' {
   param($g,$w,$h)
   Add-Callout $g 1 '当前顶层：特效' 520 120 40 86 220

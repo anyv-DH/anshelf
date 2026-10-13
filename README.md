@@ -147,8 +147,8 @@ UI 与导入验收脚本见 `scripts/`，测试说明见 [TEST_PLAN.md](TEST_PLA
 
 **支付宝**
 
-![支付宝打赏二维码](docs/images/donate-alipay.jpg)
+![支付宝打赏二维码](docs/images/donate-alipay-small.jpg)
 
 **微信支付**
 
-![微信支付打赏二维码](docs/images/donate-wechat.jpg)
+![微信支付打赏二维码](docs/images/donate-wechat-small.jpg)

@@ -145,6 +145,9 @@ UI 与导入验收脚本见 `scripts/`，测试说明见 [TEST_PLAN.md](TEST_PLA
 
 感谢每一份鼓励，让这个小工具可以继续成长。
 
-![打赏二维码](docs/images/donate-alipay-small.jpg)
-
-![打赏二维码](docs/images/donate-wechat-small.jpg)
+<table>
+  <tr>
+    <td><img src="docs/images/donate-alipay-small.jpg" alt="打赏二维码" width="260"></td>
+    <td><img src="docs/images/donate-wechat-small.jpg" alt="打赏二维码" width="260"></td>
+  </tr>
+</table>

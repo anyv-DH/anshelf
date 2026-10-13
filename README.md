@@ -134,3 +134,28 @@ UI 与导入验收脚本见 `scripts/`，测试说明见 [TEST_PLAN.md](TEST_PLA
 ## 许可证与归属
 项目代码采用 [Apache License 2.0](LICENSE)，并附带 [NOTICE](NOTICE) 与 [COMMERCIAL-ATTRIBUTION.md](COMMERCIAL-ATTRIBUTION.md)。个人、学习、研究和非商业创作可以免费使用，不要求额外页面署名；商业再发布或商业集成必须保留源代码归属、NOTICE，并在软件可见 UI 页面保留「安屿动画」。第三方组件许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 `vendor/licenses/`。
 商业合同、大规模分发或特定国家／地区使用前，请让熟悉适用法域的律师审核最终文本。
+
+## 给创作加一点光
+
+如果安安素材管理器曾帮你更快找到素材、顺利完成一次创作，欢迎请作者喝一杯咖啡。
+
+你的每一份支持，都会用于项目的持续维护、预览体验优化，以及更多实用功能的开发。
+
+打赏完全自愿，不影响软件的免费下载、使用和开源许可。即使不打赏，也欢迎自由使用、提出建议，或把项目分享给需要的创作者。
+
+感谢每一份鼓励，让这个小工具可以继续成长。
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center">
+        <img src="docs/images/donate-alipay.jpg" alt="支付宝打赏二维码" width="320" />
+        <br />支付宝
+      </td>
+      <td align="center">
+        <img src="docs/images/donate-wechat.jpg" alt="微信支付打赏二维码" width="320" />
+        <br />微信支付
+      </td>
+    </tr>
+  </table>
+</div>

@@ -145,10 +145,6 @@ UI 与导入验收脚本见 `scripts/`，测试说明见 [TEST_PLAN.md](TEST_PLA
 
 感谢每一份鼓励，让这个小工具可以继续成长。
 
-**支付宝**
+![打赏二维码](docs/images/donate-alipay-small.jpg)
 
-![支付宝打赏二维码](docs/images/donate-alipay-small.jpg)
-
-**微信支付**
-
-![微信支付打赏二维码](docs/images/donate-wechat-small.jpg)
+![打赏二维码](docs/images/donate-wechat-small.jpg)

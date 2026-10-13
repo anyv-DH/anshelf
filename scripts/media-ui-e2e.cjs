@@ -1,0 +1,168 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { pathToFileURL } = require('node:url');
+const { _electron } = require(process.env.ANSHELF_PLAYWRIGHT || 'playwright');
+const root = path.resolve(__dirname, '..');
+
+async function main() {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-media-ui-'));
+  const checks = [], errors = [];
+  let app;
+  try {
+    const wav = Buffer.alloc(44 + 44100 * 2 * 12);
+    wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(44100, 24); wav.writeUInt32LE(88200, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+    for (let n = 0; n < (wav.length - 44) / 2; n++) wav.writeInt16LE(Math.round(Math.sin(n * 440 * 2 * Math.PI / 44100) * 800), 44 + n * 2);
+    const audio = path.join(temporary, 'sample.wav'); await fs.writeFile(audio, wav);
+    const png = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"><rect width="800" height="400" fill="#c1aaf9"/><circle cx="400" cy="200" r="90" fill="#6c527f"/></svg>');
+    const gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAO7u7gAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+    const fixture = { assets: [
+      { id: 'ordinary', name: '测试武器', previewUrl: png, previewStatus: 'ready', kind: 'fla', assetType: 'ordinary', extension: '.fla', createdAt: 4 },
+      { id: 'effect', name: '测试火焰', previewUrl: gif, staticPreviewUrl: png, previewStatus: 'ready', previewFormat: 'gif', previewAnimated: true, kind: 'fla', assetType: 'effect', extension: '.fla', createdAt: 3 },
+      { id: 'sound', name: '测试音效', mediaUrl: pathToFileURL(audio).href, kind: 'audio', assetType: 'audio', extension: '.wav', createdAt: 2 },
+      { id: 'sound2', name: '第二音效', mediaUrl: pathToFileURL(audio).href, kind: 'audio', assetType: 'audio', extension: '.wav', createdAt: 1 },
+    ], categories: [{ id: 'people', name: '人物' }, { id: 'male', name: '男', parentId: 'people' }, { id: 'female', name: '女', parentId: 'people' }, ...Array.from({ length: 45 }, (_, n) => ({ id: 'category-' + n, name: '分类' + n }))], queue: {}, bridge: { connected: true } };
+    await fs.writeFile(path.join(temporary, 'fixture.json'), JSON.stringify(fixture));
+    await fs.writeFile(path.join(temporary, 'preload.cjs'), `const { contextBridge, ipcRenderer } = require('electron');
+const methods = ['snapshot','importFiles','importFolder','setTheme','windowAction','updateAsset','setCategoryPinned','assignCategory','send','revealInFolder'];
+contextBridge.exposeInMainWorld('shelf',Object.freeze({...Object.fromEntries(methods.map(name=>[name,(...args)=>ipcRenderer.invoke('test:call',name,args)])),startDrag:id=>ipcRenderer.send('test:drag',id)}));`);
+    await fs.writeFile(path.join(temporary, 'main.cjs'), `const {app,BrowserWindow,ipcMain}=require('electron');
+const fs=require('node:fs'); const fixture=JSON.parse(fs.readFileSync(${JSON.stringify(path.join(temporary,'fixture.json'))},'utf8'));
+const calls=[]; app.whenReady().then(()=>{const win=new BrowserWindow({width:1280,height:800,webPreferences:{preload:${JSON.stringify(path.join(temporary,'preload.cjs'))},contextIsolation:true,sandbox:true,nodeIntegration:false}});
+ipcMain.handle('test:call',(_e,name,args)=>{calls.push({name,args}); if(name==='snapshot')return fixture; if(name==='importFiles'||name==='importFolder')return{added:0,duplicates:0,failed:[]}; if(name==='updateAsset'){Object.assign(fixture.assets.find(a=>a.id===args[0]),args[1]);return true;} if(name==='setCategoryPinned'){fixture.categories.find(c=>c.id===args[0]).pinned=args[1];return true;} if(name==='assignCategory'){fixture.assets.filter(a=>args[0].includes(a.id)).forEach(a=>a.categoryId=args[1]);return true;} return true;});
+ipcMain.on('test:drag',(_e,id)=>calls.push({name:'startDrag',args:[id]})); global.testCalls=calls; global.testFixture=fixture;
+win.loadFile(${JSON.stringify(path.join(root,'ui/index.html'))});}); app.on('window-all-closed',()=>app.quit());`);
+    app = await _electron.launch({ executablePath: require(path.join(root, 'node_modules/electron')), args: [path.join(temporary, 'main.cjs'), '--user-data-dir=' + path.join(temporary, 'profile')], timeout: 60000 });
+    const page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));
+    await page.waitForSelector('.asset-card');
+    for (const [category, count] of [['ordinary', 1], ['effects', 1], ['audio', 2]]) {
+      await page.locator(`#navigation [data-id="${category}"]`).click();
+      assert.equal(await page.locator('.asset-card').count(), count);
+    }
+    assert.equal(await page.locator('.asset-card [data-action="send"]').count(), 0);
+    assert.equal(await page.locator('.asset-card [data-action="open-animate"]').count(), 0);
+    checks.push('ordinary/effect/audio navigation and appropriate audio actions');
+    for (const mode of ['ordinary', 'effect', 'audio']) {
+      await page.locator(`[data-action="import"][data-mode="${mode}"]`).click();
+      assert.equal(await page.locator('#dialog-content').getAttribute('data-import-mode'), mode);
+      assert.equal(await page.locator('#prefer-preview').count(), mode === 'audio' ? 0 : 1);
+      await page.locator('[data-action="import-files"]').click();
+      assert.equal((await app.evaluate(() => global.testCalls.filter(item => item.name === 'importFiles').at(-1))).args[0].mode, mode);
+    }
+    checks.push('three distinct import entries send their selected mode');
+    await page.locator('#navigation [data-id="all"]').click();
+    await page.locator('[data-asset="ordinary"] .preview-trigger').click();
+    const viewport = page.locator('[data-preview-viewport]'); await viewport.waitFor();
+    await page.waitForFunction(() => document.querySelector('[data-preview-viewport] img').naturalWidth > 0);
+    const box = await viewport.boundingBox();
+    await page.mouse.move(box.x + box.width * .65, box.y + box.height * .45); await page.mouse.wheel(0, -350);
+    await page.waitForFunction(() => Number(document.querySelector('[data-preview-viewport]').dataset.scale) > 1.5);
+    const before = await viewport.locator('img').evaluate(image => image.style.transform);
+    await page.mouse.down(); await page.mouse.move(box.x + box.width * .65 + 60, box.y + box.height * .45 + 40); await page.mouse.up();
+    assert.notEqual(await viewport.locator('img').evaluate(image => image.style.transform), before);
+    await page.locator('[data-zoom="reset"]').click(); assert.equal(await viewport.getAttribute('data-scale'), '1');
+    await viewport.focus(); await page.keyboard.press('-'); assert.ok(Number(await viewport.getAttribute('data-scale')) < 1);
+    await page.keyboard.press('0'); assert.equal(await viewport.getAttribute('data-scale'), '1');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.wheel(0, -10000);
+    await page.waitForFunction(() => document.querySelector('[data-preview-viewport]').dataset.scale === '8');
+    await page.mouse.wheel(0, 10000);
+    await page.waitForFunction(() => document.querySelector('[data-preview-viewport]').dataset.scale === '0.25');
+    await page.locator('[data-action="close-dialog"]').click();
+    checks.push('real wheel zoom, captured-pointer pan and keyboard reset');
+    await page.locator('[data-asset="effect"]').hover();
+    assert.match(await page.locator('[data-asset="effect"] .animated-image').getAttribute('src'), /image\/gif/);
+    await page.locator('#page-title').hover();
+    assert.match(await page.locator('[data-asset="effect"] .animation-cover img').getAttribute('src'), /image\/svg/);
+    assert.equal(await page.locator('[data-asset="effect"] .animated-image').isVisible(), false);
+    await page.locator('[data-asset="effect"] .preview-trigger').click();
+    assert.match(await page.locator('.lightbox-preview img').getAttribute('src'), /image\/gif/);
+    await page.locator('[data-action="close-dialog"]').click();
+    checks.push('GIF hover playback with a still outside hover and animation in lightbox');
+    await page.locator('#navigation [data-id="audio"]').click();
+    await page.locator('[data-asset="sound"] .audio-play').click();
+    await page.waitForFunction(() => document.querySelector('#audio-player').dataset.playing === 'true');
+    await page.waitForTimeout(450);
+    const firstTime = Number(await page.locator('#audio-player').getAttribute('data-time'));
+    await page.locator('[data-asset="sound"] [data-action="favorite"]').click();
+    await page.waitForTimeout(1250);
+    assert.equal(await page.locator('#audio-player').getAttribute('data-playing'), 'true');
+    assert.ok(Number(await page.locator('#audio-player').getAttribute('data-time')) > firstTime);
+    await page.locator('#audio-seek').evaluate(input => { input.value = '5'; input.dispatchEvent(new Event('input', { bubbles: true })); });
+    assert.ok(Number(await page.locator('#audio-player').getAttribute('data-time')) >= 5);
+    await page.locator('#audio-seek').focus();
+    await page.waitForTimeout(400);
+    assert.ok(Number(await page.locator('#audio-seek').inputValue()) > 5);
+    await page.locator('[data-asset="sound2"] .audio-play').click();
+    assert.equal(await page.locator('#audio-player').getAttribute('data-id'), 'sound2');
+    await page.locator('#audio-player [data-action="audio-stop"]').click(); assert.equal(await page.locator('#audio-player').isVisible(), false);
+    checks.push('real WAV playback, snapshot continuity, seek, switching and stop');
+    await page.locator('[data-asset="sound"] [data-drag-id]').dispatchEvent('dragstart');
+    assert.deepEqual((await app.evaluate(() => global.testCalls.filter(item => item.name === 'startDrag').at(-1))).args, ['sound']);
+    checks.push('drag handler passes only known asset ID through synchronous bridge');
+    await page.locator('[data-asset="sound"] h3').click();
+    await page.locator('[data-asset="sound2"] h3').click({ modifiers: ['Control'] });
+    await page.locator('[data-action="toggle-quick-categories"]').click();
+    await page.locator('#quick-category-filter').fill('人物 / 女');
+    await page.locator('.quick-category-options [data-id="female"]').click();
+    await page.locator('#categories [data-action="category"][data-id="people"]').click();
+    assert.equal(await page.locator('.asset-card').count(), 2);
+    assert.equal(await page.locator('.asset-card:not(.audio-card)').count(), 0);
+    assert.match(await page.locator('#page-title').textContent(), /音频/);
+    await page.locator('#navigation [data-id="favorites"]').click();
+    assert.equal(await page.locator('.asset-card').count(), 1);
+    assert.equal(await page.locator('.asset-card').getAttribute('data-asset'), 'sound');
+    await page.locator('#navigation [data-id="all"]').click();
+    assert.equal(await page.locator('.asset-card').count(), 4);
+    checks.push('audio multi-select classification and favorites keep the active media filter');
+    await page.locator('[data-action="toggle-category"][data-id="people"]').click();
+    assert.equal(await page.locator('#categories [data-action="category"][data-id="female"]').count(), 0);
+    await page.locator('#category-filter').fill('女');
+    assert.equal(await page.locator('#categories .category-row').count(), 2);
+    await page.locator('#category-filter').fill('');
+    assert.equal(await page.locator('#categories [data-action="category"][data-id="female"]').count(), 0);
+    await page.reload(); await page.waitForSelector('.asset-card');
+    assert.equal(await page.locator('#categories [data-action="category"][data-id="female"]').count(), 0);
+    await page.locator('#category-filter').fill('分类3');
+    await page.locator('[data-action="pin-category"][data-id="category-3"]').click();
+    await page.locator('#category-filter').fill('');
+    await page.waitForFunction(() => document.querySelector('#categories .category-row').dataset.category === 'category-3');
+    await page.locator('[data-action="pin-category"][data-id="category-3"]').click();
+    assert.equal((await app.evaluate(() => global.testFixture.categories.find(item => item.id === 'category-3'))).pinned, false);
+    const geometry = await page.locator('#categories').evaluate(tree => { const box = tree.getBoundingClientRect(), footer = document.querySelector('.sidebar-bottom').getBoundingClientRect(); return { scroll: tree.scrollHeight > tree.clientHeight, fits: box.bottom <= footer.top + 1 }; });
+    assert.equal(geometry.scroll, true); assert.equal(geometry.fits, true);
+    checks.push('category folds persist, filter temporarily reveals path, pin/unpin and independent overflow');
+    await page.locator('[data-asset="ordinary"] h3').click();
+    await page.locator('[data-action="toggle-quick-categories"]').click();
+    await page.locator('#quick-category-filter').fill('人物 / 女');
+    assert.equal(await page.locator('.quick-category-options [data-category-name]:visible').count(), 1);
+    assert.equal(await page.locator('.quick-category-options [data-id="female"]').isVisible(), true);
+    await page.locator('[data-action="deselect"]').click();
+    checks.push('batch classification filters large category sets within a bounded area');
+    await app.evaluate(() => { const asset = global.testFixture.assets.find(item => item.id === 'sound'); asset.mediaUrl = 'file:///nonexistent-anshelf-test.wav'; });
+    await page.reload(); await page.waitForSelector('[data-asset="sound"]');
+    await page.locator('[data-asset="sound"] .audio-play').click();
+    await page.waitForSelector('#audio-error:not([hidden])');
+    assert.match(await page.locator('#audio-error').textContent(), /解码|格式/);
+    await page.locator('[data-asset="sound2"] .audio-play').click();
+    await page.waitForFunction(() => document.querySelector('#audio-player').dataset.playing === 'true');
+    assert.equal(await page.locator('#audio-error').isVisible(), false);
+    checks.push('invalid audio reports decode failure and switching to a good source recovers');
+    await page.locator('#audio-player [data-action="audio-stop"]').click();
+    await page.locator('[data-action="theme"][data-theme="warm"]').click();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(930, 700));
+    assert.equal(await page.locator('[data-action="import"][data-mode="audio"]').isVisible(), true);
+    const compact = await page.locator('.sidebar').evaluate(sidebar => { const box = sidebar.getBoundingClientRect(), footer = sidebar.querySelector('.sidebar-bottom').getBoundingClientRect(); return { fits: footer.bottom <= box.bottom + 1, overflow: sidebar.scrollHeight > sidebar.clientHeight + 1 }; });
+    assert.equal(compact.fits, true); assert.equal(compact.overflow, false);
+    await page.locator('[data-asset="ordinary"] .preview-trigger').click();
+    assert.equal(await page.locator('[data-zoom="reset"]').isVisible(), true);
+    await page.locator('[data-action="close-dialog"]').click();
+    checks.push('warm theme at 930x700 retains import controls, sidebar footer and zoom controls');
+    await fs.mkdir(path.join(root, 'test-output'), { recursive: true });
+    await page.screenshot({ path: path.join(root, 'test-output/media-ui-1280.png'), scale: 'css' });
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ passed: checks.length, checks, pageErrors: errors }, null, 2));
+  } finally { if (app) await app.close(); await fs.rm(temporary, { recursive: true, force: true }); }
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });

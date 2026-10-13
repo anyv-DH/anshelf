@@ -1,0 +1,70 @@
+<!-- Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' anshelf: data: blob:; media-src 'self' anshelf: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'">
+  <title>安安素材管理器</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="brand.css">
+</head>
+<body>
+  <header class="titlebar" aria-label="窗口标题栏">
+    <div class="titlebar-brand"><span data-icon="layers"></span><strong class="titlebar-wordmark"><span class="anan-wordmark" role="img" aria-label="安安"></span><span>素材管理器</span></strong><span class="titlebar-note">安屿动画 · 你的创作素材，一眼找到</span></div>
+    <div class="titlebar-controls"><button data-action="window-minimize" aria-label="最小化" title="最小化" data-icon="minimize"></button><button data-action="window-maximize" aria-label="最大化或还原" title="最大化或还原" data-icon="maximize"></button><button class="window-close" data-action="window-close" aria-label="关闭窗口" title="关闭窗口" data-icon="close"></button></div>
+  </header>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="素材导航">
+      <a class="brand" href="#" data-action="home" aria-label="安安素材管理器，全部素材">
+        <span class="brand-symbol" data-icon="layers"></span>
+        <span class="brand-lockup"><span class="anan-wordmark" aria-hidden="true"></span><small>素材管理器</small></span>
+      </a>
+      <div class="workspace-label">我的素材空间 <span>LOCAL</span></div>
+      <nav id="navigation" aria-label="素材筛选"></nav>
+      <div class="section-label"><span>我的分类</span><button class="icon-button" data-action="create-category" title="新建分类" aria-label="新建分类" data-icon="plus"></button></div>
+      <label class="category-search"><span data-icon="search"></span><input id="category-filter" type="search" placeholder="快速找分类" aria-label="筛选分类" autocomplete="off"></label>
+      <nav id="categories" class="category-list" aria-label="自定义分类"></nav>
+      <div class="sidebar-bottom">
+        <div class="theme-switch" role="group" aria-label="界面色调"><button data-action="theme" data-theme="dark" aria-label="暗色调" aria-pressed="true"><span data-icon="moon"></span>暗色</button><button data-action="theme" data-theme="warm" aria-label="暖色调" aria-pressed="false"><span data-icon="sun"></span>暖色</button></div>
+        <button class="bridge-card" data-action="bridge-help">
+          <span class="bridge-mark">An</span><span><strong>连接 Adobe Animate</strong><small id="sidebar-bridge">打开 AN 面板即可接收</small></span><span data-icon="chevron"></span>
+        </button>
+        <div class="local-note"><span class="status-dot"></span> 本地素材 · 安心收藏 <span data-icon="info"></span></div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="breadcrumb">素材空间 <span data-icon="chevron"></span> <strong id="breadcrumb">全部素材</strong></div>
+        <div class="window-actions"><button id="connection" class="connection-pill" data-action="bridge-help"><span class="status-dot"></span><span>AN 未连接</span></button><button id="compact" class="icon-button" data-action="compact" title="切换迷你置顶模式" aria-label="切换迷你置顶模式" data-icon="compact"></button><button id="inspector-toggle" class="icon-button" data-action="toggle-inspector" title="显示素材详情" aria-label="显示素材详情" aria-pressed="false" data-icon="info"></button></div>
+      </header>
+      <div id="host-error" class="host-error" role="alert" hidden></div>
+      <nav id="subcategories" class="subcategory-bar" aria-label="当前类目的子文件夹" hidden></nav>
+      <section class="library-heading">
+        <div><h1 id="page-title">全部素材<span class="heading-dot">.</span></h1><p id="page-description">把灵感收好，让创作轻一点。</p></div>
+        <div class="import-entries" role="group" aria-label="导入素材类型"><button class="button primary import-main" data-action="import" data-mode="ordinary"><span data-icon="plus"></span>普通素材</button><button class="button secondary" data-action="import" data-mode="effect"><span data-icon="spark"></span>特效</button><button class="button secondary" data-action="import" data-mode="audio"><span data-icon="music"></span>音频</button></div>
+      </section>
+      <section class="tools" aria-label="筛选和排序">
+        <label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="搜索名称或标签…" aria-label="搜索素材名称或标签" autocomplete="off"><kbd>/</kbd></label>
+        <span id="asset-count" class="asset-count">0 个素材</span>
+        <div class="density"><button id="density" class="sort-trigger density-trigger" data-action="toggle-density" aria-label="网格密度" aria-haspopup="menu" aria-expanded="false"><span data-icon="grid"></span><span id="density-label">自动</span><span data-icon="down"></span></button><div id="density-menu" class="sort-menu" role="menu" aria-label="网格密度" hidden><button role="menuitemradio" data-action="density" data-density="auto" aria-checked="true">自动<span data-icon="check"></span></button><button role="menuitemradio" data-action="density" data-density="4" aria-checked="false">每行 4 个<span data-icon="check"></span></button><button role="menuitemradio" data-action="density" data-density="5" aria-checked="false">每行 5 个<span data-icon="check"></span></button><button role="menuitemradio" data-action="density" data-density="6" aria-checked="false">每行 6 个<span data-icon="check"></span></button></div></div>
+        <div class="filter"><button id="filter" class="sort-trigger filter-trigger" data-action="toggle-filter" aria-label="素材筛选" aria-haspopup="menu" aria-expanded="false"><span>筛选</span><span data-icon="down"></span></button><div id="filter-menu" class="sort-menu" role="menu" aria-label="素材筛选" hidden><button role="menuitemcheckbox" data-action="filter" data-filter="hide-child-categories" aria-checked="false">隐藏已归入子文件夹<span data-icon="check"></span></button></div></div>
+        <div class="sort"><button id="sort" class="sort-trigger" data-action="toggle-sort" aria-label="素材排序" aria-haspopup="menu" aria-expanded="false"><span>最近导入</span><span data-icon="down"></span></button><div id="sort-menu" class="sort-menu" role="menu" aria-label="素材排序" hidden><button role="menuitemradio" data-action="sort" data-sort="newest" aria-checked="true">最近导入<span data-icon="check"></span></button><button role="menuitemradio" data-action="sort" data-sort="oldest" aria-checked="false">最早导入<span data-icon="check"></span></button><button role="menuitemradio" data-action="sort" data-sort="name" aria-checked="false">名称 A–Z<span data-icon="check"></span></button></div></div>
+      </section>
+      <div id="queue-status" class="queue-status" role="status" hidden></div>
+      <div id="bridge-status" class="bridge-status" role="status" hidden></div>
+      <section id="selection-bar" class="selection-bar" aria-label="选中素材操作" hidden></section>
+      <section id="asset-grid" class="asset-grid" aria-label="素材预览"></section>
+      <nav id="asset-pagination" class="asset-pagination" aria-label="素材分页" hidden></nav>
+      <section id="empty-state" class="empty-state" hidden></section>
+      <footer class="library-footer"><span id="footer-summary">你的素材，只在这台电脑上。</span><span>Ctrl 多选 <i>·</i> Shift 连选</span></footer>
+    </main>
+    <aside id="inspector" class="inspector" aria-label="素材详情" hidden></aside>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <section id="audio-player" class="audio-player" aria-label="音频试听播放器" hidden><button class="audio-toggle icon-button" data-action="audio-toggle" aria-label="暂停试听"><span data-icon="pause"></span></button><div class="audio-current"><strong id="audio-name"></strong><span id="audio-time">0:00 / —</span></div><input id="audio-seek" type="range" min="0" max="0" step=".1" value="0" aria-label="音频播放位置"><p id="audio-error" role="alert" hidden></p><button class="icon-button" data-action="audio-stop" aria-label="停止试听" title="停止试听"><span data-icon="close"></span></button></section>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

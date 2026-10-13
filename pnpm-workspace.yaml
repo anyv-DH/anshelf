@@ -1,0 +1,4 @@
+packages:
+  - '.'
+overrides:
+  '@electron/rebuild': '4.0.3'

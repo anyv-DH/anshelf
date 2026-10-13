@@ -1,0 +1,4998 @@
+import type {
+  FLADocument,
+  Timeline,
+  Layer,
+  Frame,
+  DisplayElement,
+  SymbolInstance,
+  VideoInstance,
+  BitmapInstance,
+  TextInstance,
+  TextRun,
+  Shape,
+  Matrix,
+  FillStyle,
+  StrokeStyle,
+  Edge,
+  Tween,
+  EaseBase,
+  EaseDirection,
+  Point,
+  PathCommand,
+  Filter,
+  MorphShape,
+  MorphSegment,
+  ColorTransform,
+  BlendMode,
+  Rectangle,
+  Symbol,
+  MovieClipInstanceState
+} from './types';
+import { getWithNormalizedPath } from './path-utils';
+import { evaluateMotionObject } from './motion-object';
+import { applyIKPose } from './ik-pose';
+import {
+  graphicSymbolFrame, instanceClock, movieClipClock, movieClipPlayhead, movieClipRun, movieClipStopFrames,
+  movieClipTicks, rootClock, type TimelineClock
+} from './symbol-loop';
+import { isLayerVisibleInFla, getMaskLayerIndex, getRigParentIndex, interpolateDecomposed, invertMatrix, isSimilarity, multiplyMatrices, matricesNearlyEqual } from './layer-utils';
+import { variableWidthStrokePolygons } from './variable-width-stroke';
+import { layerZDepthAt, sortByStageDepth, stageLayerViews, type StageCamera, type StageLayerViews } from './native-camera';
+import { documentPerspective, projectedInstanceMatrix, rotation3D, withInstanceMatrix } from './transform-3d';
+
+// Debug flag - enabled via ?debug=true URL parameter or setRendererDebug(true)
+let DEBUG = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === 'true';
+
+// Export setter for testing
+export function setRendererDebug(value: boolean): void {
+  DEBUG = value;
+}
+
+interface DebugElement {
+  type: 'shape' | 'symbol' | 'bitmap' | 'video' | 'text' | 'button-hit-area';
+  element: DisplayElement;
+  path: Path2D;
+  transform: DOMMatrix;
+  depth: number;
+  parentPath: string[];  // Symbol hierarchy path
+  fillStyles?: Map<number, FillStyle>;
+  strokeStyles?: Map<number, StrokeStyle>;
+  edges?: Edge[];
+  // For button hit areas
+  isHitArea?: boolean;
+  symbolName?: string;
+}
+
+// Cache for computed shape paths (avoids recomputing every frame)
+// A mask's fill regions, split by winding direction (see buildMaskClipPath).
+interface MaskClipPaths {
+  positive: Path2D;
+  negative: Path2D;
+  positiveCount: number;
+  negativeCount: number;
+}
+
+interface CachedShapePaths {
+  fillPaths: Map<number, Path2D>;
+  fillAreas: Map<number, number>; // signed area of each fill path (winding direction)
+  strokePaths: Map<number, Path2D>;
+  strokeOutlines: Map<number, Path2D>; // variable-width strokes, filled (nonzero) instead of stroked
+  combinedPath: Path2D;
+}
+
+export class FLARenderer {
+  private ctx: CanvasRenderingContext2D;
+  private doc: FLADocument | null = null;
+  private canvas: HTMLCanvasElement;
+  private scale: number = 1;
+  private zoomLevel: number = 1; // Manual zoom multiplier on top of the auto-fit scale
+  private panX: number = 0; // Manual pan offset in CSS pixels
+  private panY: number = 0;
+  private dpr: number = 1;
+  private debugMode: boolean = false;
+  private debugElements: DebugElement[] = [];
+  private debugSymbolPath: string[] = [];  // Current symbol hierarchy for debug
+  private clickHandler: ((e: MouseEvent) => void) | null = null;
+  private hiddenLayers: Set<number> = new Set();
+  private hiddenElements: Map<number, Set<number>> = new Map(); // layerIndex -> Set of hidden element indices
+  private layerOrder: 'forward' | 'reverse' = 'reverse';
+  private nestedLayerOrder: 'forward' | 'reverse' = 'reverse';
+  private elementOrder: 'forward' | 'reverse' = 'forward';
+  private shapePathCache = new WeakMap<Shape, CachedShapePaths>();
+  private symbolBitmapCache = new Map<string, { canvas: HTMLCanvasElement, bounds: { width: number, height: number, offsetX: number, offsetY: number } }>();
+  private movieClipInsideCache = new WeakMap<Symbol, boolean>();
+  private followCamera: boolean = false;
+  private manualCameraLayerIndex: number | undefined = undefined;
+
+  // MovieClip instance state tracking for independent playback
+  // Key format: "instancePath:symbolName" where instancePath is the path through nested symbols
+  private movieClipStates = new Map<string, MovieClipInstanceState>();
+  private stopFramesCache = new WeakMap<Timeline, ReadonlySet<number>>();
+  // Symbol instances being drawn, outermost first: each one's slot (see
+  // instanceSlot) and a clock reading back the frames its timeline showed.
+  private instanceStack: { slot: string; clock: TimelineClock }[] = [];
+  // Clock of the symbol instance getSymbolFrame resolved last.
+  private resolvedClock: TimelineClock = rootClock(0);
+  // Inverse of the canvas transform that maps stage (document) coordinates to
+  // the canvas this frame; 3D instances project in stage coordinates.
+  private stageBaseInverse: DOMMatrix | null = null;
+  private clipRunCache = new WeakMap<Frame, Map<string, { start: number; end: number }>>();
+  // Movie clip states reached by the current renderFrame; the rest have left
+  // the stage and are dropped when it ends (a clip placed again starts over).
+  private touchedMovieClips = new Set<string>();
+  // Layer and keyframe of the element being drawn (for instance keys and for
+  // seeding a newly seen movie clip's playhead).
+  private currentLayer: Layer | null = null;
+  private currentKeyframe: Frame | null = null;
+  private layerIds = new WeakMap<Layer, number>();
+  private nextLayerId = 1;
+
+  // Current scene index for multiple scene support
+  private currentScene: number = 0;
+
+  // Embedded-video playback: one cached <video> element per object URL, plus
+  // whether the timeline is currently playing and a hook to request a redraw
+  // when a video frame becomes available while paused.
+  private videoElements = new Map<string, HTMLVideoElement>();
+  private playing = false;
+  private onNeedsRedraw: (() => void) | null = null;
+
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Failed to get 2D context');
+    }
+    this.ctx = ctx;
+    this.dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+  }
+
+  enableDebugMode(): void {
+    if (this.debugMode) return;
+    this.debugMode = true;
+
+    this.clickHandler = (e: MouseEvent) => {
+      const rect = this.canvas.getBoundingClientRect();
+      // Convert click position from CSS pixels to canvas buffer coordinates
+      // This properly handles any scaling between CSS display size and canvas buffer size
+      const scaleX = this.canvas.width / rect.width;
+      const scaleY = this.canvas.height / rect.height;
+      const canvasX = (e.clientX - rect.left) * scaleX;
+      const canvasY = (e.clientY - rect.top) * scaleY;
+
+      // Convert to document coordinates (remove the base scale, zoom, and pan applied during rendering)
+      const combinedScale = this.scale * this.zoomLevel * this.dpr;
+      const docX = (canvasX - this.panX * this.dpr) / combinedScale;
+      const docY = (canvasY - this.panY * this.dpr) / combinedScale;
+
+      console.log(`Click at doc coords: (${docX.toFixed(1)}, ${docY.toFixed(1)}), canvas: (${canvasX.toFixed(1)}, ${canvasY.toFixed(1)}), tracking ${this.debugElements.length} elements`);
+
+      // Find all elements under the click point (from top to bottom)
+      const hitElements: DebugElement[] = [];
+
+      // Save current transform and reset to identity for hit testing
+      this.ctx.save();
+      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      for (const debugEl of this.debugElements) {
+        // The stored transform includes the base combinedScale, so we use canvas coordinates
+        // and transform them to local element coordinates
+        const inverse = debugEl.transform.inverse();
+        const localX = inverse.a * canvasX + inverse.c * canvasY + inverse.e;
+        const localY = inverse.b * canvasX + inverse.d * canvasY + inverse.f;
+
+        // Test if point is in path (path is in local coordinates)
+        // Use 'evenodd' fill rule to match rendering
+        if (this.ctx.isPointInPath(debugEl.path, localX, localY, 'evenodd')) {
+          hitElements.push(debugEl);
+        }
+      }
+
+      this.ctx.restore();
+
+      if (hitElements.length > 0) {
+        // Sort by depth (deepest first - top of visual stack) and get the topmost one
+        hitElements.sort((a, b) => b.depth - a.depth);
+        const el = hitElements[0];
+
+        const pathStr = el.parentPath.length > 0 ? el.parentPath.join(' > ') : '(root)';
+        console.group(`${el.type.toUpperCase()} in ${pathStr}`);
+        console.log('Path:', el.parentPath.length > 0 ? el.parentPath : ['(root timeline)']);
+        console.log('Element:', el.element);
+        console.log('Transform:', {
+          a: el.transform.a.toFixed(4),
+          b: el.transform.b.toFixed(4),
+          c: el.transform.c.toFixed(4),
+          d: el.transform.d.toFixed(4),
+          tx: el.transform.e.toFixed(2),
+          ty: el.transform.f.toFixed(2)
+        });
+
+        if (el.type === 'shape') {
+          const shape = el.element as Shape;
+          console.log('Fill Styles:', el.fillStyles ? Object.fromEntries(el.fillStyles) : {});
+          console.log('Stroke Styles:', el.strokeStyles ? Object.fromEntries(el.strokeStyles) : {});
+          console.log('Shape Matrix:', shape.matrix);
+
+          // Only show edges with out-of-bounds coordinates
+          const BOUNDS = 10000; // Reasonable max coordinate
+          const isOutOfBounds = (v: number) => !Number.isFinite(v) || Math.abs(v) > BOUNDS;
+
+          const badEdges: { index: number; edge: Edge; badCommands: string[] }[] = [];
+          el.edges?.forEach((edge, i) => {
+            const badCommands: string[] = [];
+            edge.commands.forEach((cmd, j) => {
+              if (cmd.type === 'M' || cmd.type === 'L') {
+                if (isOutOfBounds(cmd.x) || isOutOfBounds(cmd.y)) {
+                  badCommands.push(`${j}: ${cmd.type} ${cmd.x.toFixed(2)}, ${cmd.y.toFixed(2)}`);
+                }
+              } else if (cmd.type === 'Q') {
+                if (isOutOfBounds(cmd.x) || isOutOfBounds(cmd.y) || isOutOfBounds(cmd.cx) || isOutOfBounds(cmd.cy)) {
+                  badCommands.push(`${j}: Q cx=${cmd.cx.toFixed(2)}, cy=${cmd.cy.toFixed(2)} -> ${cmd.x.toFixed(2)}, ${cmd.y.toFixed(2)}`);
+                }
+              } else if (cmd.type === 'C') {
+                if (isOutOfBounds(cmd.x) || isOutOfBounds(cmd.y) ||
+                    isOutOfBounds(cmd.c1x) || isOutOfBounds(cmd.c1y) ||
+                    isOutOfBounds(cmd.c2x) || isOutOfBounds(cmd.c2y)) {
+                  badCommands.push(`${j}: C c1=(${cmd.c1x.toFixed(2)}, ${cmd.c1y.toFixed(2)}) c2=(${cmd.c2x.toFixed(2)}, ${cmd.c2y.toFixed(2)}) -> ${cmd.x.toFixed(2)}, ${cmd.y.toFixed(2)}`);
+                }
+              }
+            });
+            if (badCommands.length > 0) {
+              badEdges.push({ index: i, edge, badCommands });
+            }
+          });
+
+          console.log(`Edges: ${el.edges?.length || 0} total, ${badEdges.length} with out-of-bounds coords (>${BOUNDS})`);
+
+          // If few edges or has bad edges, show details
+          if ((el.edges?.length || 0) <= 5 || badEdges.length > 0) {
+            el.edges?.forEach((edge, i) => {
+              console.log(`  Edge ${i}: fill0=${edge.fillStyle0}, fill1=${edge.fillStyle1}, stroke=${edge.strokeStyle}, commands=${edge.commands.length}`);
+              edge.commands.forEach((cmd, j) => {
+                if (cmd.type === 'M') {
+                  console.log(`    ${j}: M ${cmd.x.toFixed(2)}, ${cmd.y.toFixed(2)}`);
+                } else if (cmd.type === 'L') {
+                  console.log(`    ${j}: L ${cmd.x.toFixed(2)}, ${cmd.y.toFixed(2)}`);
+                } else if (cmd.type === 'Q') {
+                  console.log(`    ${j}: Q cx=${cmd.cx.toFixed(2)}, cy=${cmd.cy.toFixed(2)} -> ${cmd.x.toFixed(2)}, ${cmd.y.toFixed(2)}`);
+                } else if (cmd.type === 'C') {
+                  console.log(`    ${j}: C c1=(${cmd.c1x.toFixed(2)}, ${cmd.c1y.toFixed(2)}) c2=(${cmd.c2x.toFixed(2)}, ${cmd.c2y.toFixed(2)}) -> ${cmd.x.toFixed(2)}, ${cmd.y.toFixed(2)}`);
+                } else if (cmd.type === 'Z') {
+                  console.log(`    ${j}: Z`);
+                }
+              });
+            });
+          } else {
+            badEdges.forEach(({ index, edge, badCommands }) => {
+              console.log(`  Edge ${index}: fill0=${edge.fillStyle0}, fill1=${edge.fillStyle1}, stroke=${edge.strokeStyle}`);
+              badCommands.forEach(cmd => console.log(`    ${cmd}`));
+            });
+          }
+        } else if (el.type === 'symbol') {
+          const symbol = el.element as SymbolInstance;
+          console.log('Library Item:', symbol.libraryItemName);
+          console.log('Loop:', symbol.loop);
+          console.log('First Frame:', symbol.firstFrame);
+        } else if (el.type === 'bitmap') {
+          const bitmap = el.element as BitmapInstance;
+          console.log('Library Item:', bitmap.libraryItemName);
+        } else if (el.type === 'button-hit-area') {
+          const button = el.element as SymbolInstance;
+          console.log('Button Symbol:', el.symbolName);
+          console.log('Library Item:', button.libraryItemName);
+          console.log('Hit Area: This is the clickable region (invisible at runtime)');
+        }
+
+        console.groupEnd();
+      } else {
+        console.log('No elements found at click position');
+      }
+    };
+
+    this.canvas.addEventListener('click', this.clickHandler);
+    this.canvas.style.cursor = 'crosshair';
+    console.log('Debug mode enabled - click on canvas to inspect elements');
+  }
+
+  disableDebugMode(): void {
+    if (!this.debugMode) return;
+    this.debugMode = false;
+
+    if (this.clickHandler) {
+      this.canvas.removeEventListener('click', this.clickHandler);
+      this.clickHandler = null;
+    }
+    this.canvas.style.cursor = 'default';
+    console.log('Debug mode disabled');
+  }
+
+  setHiddenLayers(hiddenLayers: Set<number>): void {
+    this.hiddenLayers = new Set(hiddenLayers);
+  }
+
+  setHiddenElements(hiddenElements: Map<number, Set<number>>): void {
+    this.hiddenElements = new Map(
+      Array.from(hiddenElements.entries()).map(([k, v]) => [k, new Set(v)])
+    );
+  }
+
+  setLayerOrder(order: 'forward' | 'reverse'): void {
+    this.layerOrder = order;
+  }
+
+  setNestedLayerOrder(order: 'forward' | 'reverse'): void {
+    this.nestedLayerOrder = order;
+  }
+
+  setElementOrder(order: 'forward' | 'reverse'): void {
+    this.elementOrder = order;
+  }
+
+  /**
+   * Set the current scene index for rendering.
+   */
+  setCurrentScene(sceneIndex: number): void {
+    if (!this.doc) return;
+    if (sceneIndex >= 0 && sceneIndex < this.doc.timelines.length) {
+      this.currentScene = sceneIndex;
+    }
+  }
+
+  /**
+   * Get the current scene index.
+   */
+  getCurrentScene(): number {
+    return this.currentScene;
+  }
+
+  /**
+   * Zoom in one step (max 400%), keeping the viewport center fixed.
+   */
+  zoomIn(): void {
+    this.applyZoom(1.2);
+  }
+
+  /**
+   * Zoom out one step (min 25%), keeping the viewport center fixed.
+   */
+  zoomOut(): void {
+    this.applyZoom(1 / 1.2);
+  }
+
+  private applyZoom(factor: number): void {
+    const newZoom = Math.min(Math.max(this.zoomLevel * factor, 0.25), 4);
+    if (newZoom === this.zoomLevel) return;
+    // Adjust pan so the point at the viewport center stays at the center
+    const centerX = this.canvas.width / this.dpr / 2;
+    const centerY = this.canvas.height / this.dpr / 2;
+    const ratio = newZoom / this.zoomLevel;
+    this.panX = centerX - (centerX - this.panX) * ratio;
+    this.panY = centerY - (centerY - this.panY) * ratio;
+    this.zoomLevel = newZoom;
+  }
+
+  setPreviewScale(scale: number): void { this.zoomLevel = scale; }
+  resetZoom(): void {
+    this.zoomLevel = 1;
+  }
+
+  /**
+   * Pan the view by the given offset in CSS pixels.
+   */
+  pan(dx: number, dy: number): void {
+    this.panX += dx;
+    this.panY += dy;
+  }
+
+  resetPan(): void {
+    this.panX = 0;
+    this.panY = 0;
+  }
+
+  getZoomLevel(): number {
+    return this.zoomLevel;
+  }
+
+  getPanOffset(): { x: number; y: number } {
+    return { x: this.panX, y: this.panY };
+  }
+
+  // Clear all cached data to force recomputation
+  clearCaches(): void {
+    // Clear shape path cache by creating a new WeakMap
+    this.shapePathCache = new WeakMap<Shape, CachedShapePaths>();
+    // Clear symbol bitmap cache
+    this.symbolBitmapCache.clear();
+    this.movieClipInsideCache = new WeakMap();
+    // Clear MovieClip instance states
+    this.movieClipStates.clear();
+    this.instanceStack = [];
+  }
+
+  // Record the layer and keyframe whose element is about to be drawn.
+  private enterKeyframe(layer: Layer, frame: Frame): void {
+    this.currentLayer = layer;
+    this.currentKeyframe = frame;
+    this.currentKeyframeStart = frame.index;
+  }
+
+  // An instance's place in its parent timeline: symbol, layer and element index.
+  // Joined along instanceStack it identifies one instance on stage.
+  private instanceSlot(symbolName: string, elementIndex: number): string {
+    let layerId = 0;
+    if (this.currentLayer) {
+      layerId = this.layerIds.get(this.currentLayer) ?? 0;
+      if (!layerId) {
+        layerId = this.nextLayerId++;
+        this.layerIds.set(this.currentLayer, layerId);
+      }
+    }
+    return `${symbolName}@${layerId}:${elementIndex}`;
+  }
+
+  // Get or create the state of the movie clip instance at `key`. A clip seen for
+  // the first time has been playing since its parent (read back on parentClock)
+  // entered its run of keyframes, so after a seek (or in a one-frame export) it
+  // shows the frame continuous playback would.
+  private getOrCreateMovieClipState(
+    key: string,
+    instance: SymbolInstance,
+    elementIndex: number,
+    totalFrames: number,
+    parentFrame: number,
+    parentClock: TimelineClock,
+    timeline: Timeline
+  ): MovieClipInstanceState {
+    const run = this.clipRun(elementIndex, instance.libraryItemName, parentFrame);
+    let state = this.movieClipStates.get(key);
+    // A different run of keyframes (e.g. after the parent timeline loops back
+    // over a gap) is a new instance.
+    if (!state || state.startParentFrame !== run.start) {
+      let stopFrames = this.stopFramesCache.get(timeline);
+      if (!stopFrames) {
+        stopFrames = movieClipStopFrames(timeline);
+        this.stopFramesCache.set(timeline, stopFrames);
+      }
+      const ticks = movieClipTicks(run, parentClock);
+      const { frame, stopped } = movieClipPlayhead(ticks, totalFrames, stopFrames);
+      state = {
+        playhead: frame,
+        totalFrames,
+        startParentFrame: run.start,
+        isPlaying: !stopped,
+        elapsed: ticks,
+        stopFrames
+      };
+      this.movieClipStates.set(key, state);
+    }
+    this.touchedMovieClips.add(key);
+    return state;
+  }
+
+  // The run of keyframes holding the movie clip at `elementIndex` of the
+  // current keyframe (memoized per keyframe).
+  private clipRun(elementIndex: number, libraryItemName: string, parentFrame: number): { start: number; end: number } {
+    const layer = this.currentLayer;
+    const keyframe = this.currentKeyframe;
+    if (!layer || !keyframe) return { start: parentFrame, end: parentFrame + 1 };
+    let runs = this.clipRunCache.get(keyframe);
+    if (!runs) {
+      runs = new Map();
+      this.clipRunCache.set(keyframe, runs);
+    }
+    const id = `${elementIndex}|${libraryItemName}`;
+    let run = runs.get(id);
+    if (!run) {
+      run = movieClipRun(layer.frames, keyframe, elementIndex, libraryItemName);
+      runs.set(id, run);
+    }
+    return run;
+  }
+
+  // Advance all MovieClip playheads by one frame
+  // Called by the player (and the exporters) when advancing to the next frame
+  advanceMovieClipPlayheads(): void {
+    for (const state of this.movieClipStates.values()) {
+      state.elapsed++;
+      if (!state.isPlaying || state.totalFrames <= 1) continue;
+      // A frame script's stop() halts the clip on that frame.
+      if (state.stopFrames?.has(state.playhead)) {
+        state.isPlaying = false;
+        continue;
+      }
+      state.playhead = (state.playhead + 1) % state.totalFrames;
+    }
+  }
+
+  // Reset all MovieClip playheads to frame 0
+  // Called when seeking to a specific frame or restarting
+  resetMovieClipPlayheads(): void {
+    this.movieClipStates.clear();
+  }
+
+  // Enable/disable following the camera/ramka layer as viewport
+  setFollowCamera(enabled: boolean): void {
+    this.followCamera = enabled;
+    if (enabled && this.doc) {
+      this.manualCameraLayerIndex = this.findCameraLayerByName();
+      if (DEBUG && this.manualCameraLayerIndex !== undefined) {
+        const layer = this.doc.timelines[this.currentScene]?.layers[this.manualCameraLayerIndex];
+        console.log(`Follow camera enabled: layer "${layer?.name}" at index ${this.manualCameraLayerIndex}`);
+      }
+    } else {
+      this.manualCameraLayerIndex = undefined;
+    }
+    // Update canvas size when camera following changes
+    this.updateCanvasSize();
+  }
+
+  getFollowCamera(): boolean {
+    return this.followCamera;
+  }
+
+  // Find camera layer by name (less strict than auto-detection)
+  // Returns the index of a layer named ramka/camera/viewport/etc.
+  private findCameraLayerByName(): number | undefined {
+    if (!this.doc || !this.doc.timelines[this.currentScene]) return undefined;
+
+    const layers = this.doc.timelines[this.currentScene].layers;
+    for (let i = 0; i < layers.length; i++) {
+      const layer = layers[i];
+      const nameLower = layer.name.toLowerCase();
+      // Animate's native camera is always applied; it is not a follow target.
+      if (layer.layerType === 'camera') continue;
+
+      // Match camera-related layer names
+      if (nameLower === 'ramka' ||
+          nameLower === 'camera' ||
+          nameLower === 'cam' ||
+          nameLower === 'viewport' ||
+          nameLower === 'frame' ||
+          nameLower.includes('camera') ||
+          nameLower.includes('viewport')) {
+        // Verify layer has at least one symbol element
+        if (layer.frames.length > 0 && layer.frames[0].elements.length > 0) {
+          const element = layer.frames[0].elements[0];
+          if (element.type === 'symbol') {
+            return i;
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+
+  // Get list of potential camera layers for UI
+  getCameraLayers(): { index: number; name: string }[] {
+    if (!this.doc || !this.doc.timelines[this.currentScene]) return [];
+
+    const result: { index: number; name: string }[] = [];
+    const layers = this.doc.timelines[this.currentScene].layers;
+
+    for (let i = 0; i < layers.length; i++) {
+      const layer = layers[i];
+      const nameLower = layer.name.toLowerCase();
+      if (layer.layerType === 'camera') continue;
+
+      if (nameLower === 'ramka' ||
+          nameLower === 'camera' ||
+          nameLower === 'cam' ||
+          nameLower === 'viewport' ||
+          nameLower === 'frame' ||
+          nameLower.includes('camera') ||
+          nameLower.includes('viewport')) {
+        result.push({ index: i, name: layer.name });
+      }
+    }
+    return result;
+  }
+
+  async setDocument(doc: FLADocument, skipResize: boolean = false): Promise<void> {
+    this.doc = doc;
+    this.dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+
+    // Clear state from previous document
+    this.missingSymbols.clear();
+    this.loadedFonts.clear();
+    this.loadingFonts.clear();
+    this.movieClipStates.clear();
+    this.instanceStack = [];
+    this.releaseVideoElements();
+    this.zoomLevel = 1;
+    this.panX = 0;
+    this.panY = 0;
+
+    // Update canvas size (skip for offscreen rendering)
+    if (!skipResize) {
+      this.updateCanvasSize();
+    } else {
+      // For offscreen rendering, use 1:1 scale
+      this.scale = 1;
+      this.dpr = 1;
+    }
+
+    // Preload all fonts used in the document (skip for offscreen)
+    if (!skipResize) {
+      await this.preloadDocumentFonts(doc);
+    }
+
+    // Pre-compute shape paths asynchronously to warm up cache
+    this.precomputeShapePaths(doc);
+  }
+
+  // Collect all fonts used in the document and preload them
+  private async preloadDocumentFonts(doc: FLADocument): Promise<void> {
+    const fontsToLoad = new Set<string>();
+
+    // Scan main timeline
+    for (const timeline of doc.timelines) {
+      this.collectFontsFromTimeline(timeline, fontsToLoad);
+    }
+
+    // Scan all symbols
+    for (const symbol of doc.symbols.values()) {
+      this.collectFontsFromTimeline(symbol.timeline, fontsToLoad);
+    }
+
+    if (fontsToLoad.size === 0) return;
+
+    if (DEBUG) {
+      console.log('Fonts to preload:', Array.from(fontsToLoad));
+    }
+
+    // Load all fonts in parallel
+    const loadPromises: Promise<void>[] = [];
+    for (const fontName of fontsToLoad) {
+      const googleFontId = this.googleFonts[fontName];
+      if (googleFontId && !this.loadedFonts.has(fontName)) {
+        loadPromises.push(
+          this.loadGoogleFont(fontName, googleFontId)
+            .then(() => {
+              this.loadedFonts.add(fontName);
+              if (DEBUG) console.log(`Font loaded: ${fontName}`);
+            })
+            .catch((err) => {
+              console.warn(`Failed to load font ${fontName}:`, err);
+            })
+        );
+      }
+    }
+
+    // Wait for all fonts to load (with timeout)
+    if (loadPromises.length > 0) {
+      await Promise.race([
+        Promise.all(loadPromises),
+        new Promise<void>(resolve => setTimeout(resolve, 3000)) // 3 second timeout
+      ]);
+    }
+  }
+
+  // Collect font names from a timeline
+  private collectFontsFromTimeline(timeline: Timeline, fonts: Set<string>): void {
+    for (const layer of timeline.layers) {
+      for (const frame of layer.frames) {
+        for (const element of frame.elements) {
+          if (element.type === 'text') {
+            for (const run of element.textRuns) {
+              if (run.face) {
+                const webFontName = this.getWebFontName(run.face);
+                if (webFontName) {
+                  fonts.add(webFontName);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Get web font name from FLA font name (without triggering load)
+  private getWebFontName(flaFontName: string): string | null {
+    const fontMap: Record<string, string> = {
+      'PressStart2P-Regular': 'Press Start 2P',
+      'PressStart2P': 'Press Start 2P',
+    };
+
+    if (fontMap[flaFontName]) {
+      return fontMap[flaFontName];
+    }
+
+    for (const [key, value] of Object.entries(fontMap)) {
+      if (flaFontName.startsWith(key) || key.startsWith(flaFontName)) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  // Recalculate and update canvas size based on current settings
+  updateCanvasSize(): void {
+    if (!this.doc) return;
+
+    this.dpr = window.devicePixelRatio || 1;
+
+    // Determine effective viewport size
+    // When following camera, use detected camera viewport size
+    const viewportSize = this.getEffectiveViewportSize();
+
+    // Calculate scale to fit canvas while maintaining aspect ratio.
+    // Floor the available space so very small windows can't produce a
+    // zero or negative scale (which would render the document flipped).
+    let maxWidth = Math.max(Math.min(window.innerWidth - 100, 1920), 50);
+    let maxHeight = Math.max(Math.min(window.innerHeight - 300, 1080), 50);
+
+    // In fullscreen the surrounding page chrome is gone, so the fixed
+    // window-margin heuristic above leaves the document tiny in a sea of
+    // black. Measure the actual canvas container instead and let the
+    // document scale up past its natural size to truly fill the screen.
+    let allowUpscale = false;
+    const fsElement = typeof document !== 'undefined' ? document.fullscreenElement : null;
+    const container = this.canvas.parentElement;
+    if (fsElement && container && typeof container.getBoundingClientRect === 'function') {
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        maxWidth = rect.width;
+        maxHeight = rect.height;
+        allowUpscale = true;
+      }
+    }
+
+    const scaleX = maxWidth / viewportSize.width;
+    const scaleY = maxHeight / viewportSize.height;
+    // Cap at 1 in the normal layout (avoid blowing up small docs), but allow
+    // upscaling in fullscreen so the animation fills the available space.
+    this.scale = allowUpscale ? Math.min(scaleX, scaleY) : Math.min(scaleX, scaleY, 1);
+
+    // Calculate CSS display size
+    const displayWidth = viewportSize.width * this.scale;
+    const displayHeight = viewportSize.height * this.scale;
+
+    // Set canvas buffer size (scaled by DPR for crisp rendering)
+    this.canvas.width = displayWidth * this.dpr;
+    this.canvas.height = displayHeight * this.dpr;
+
+    // Set CSS display size
+    this.canvas.style.width = `${displayWidth}px`;
+    this.canvas.style.height = `${displayHeight}px`;
+
+    if (DEBUG) {
+      console.log('Viewport size:', viewportSize.width, 'x', viewportSize.height);
+      console.log('Canvas size:', this.canvas.width, 'x', this.canvas.height);
+      console.log('Scale:', this.scale, 'DPR:', this.dpr);
+    }
+  }
+
+  // Get the effective viewport size (camera viewport or full document)
+  private getEffectiveViewportSize(): { width: number; height: number } {
+    if (!this.doc) return { width: 550, height: 400 };
+
+    // When following camera, try to detect camera viewport size
+    if (this.followCamera && this.manualCameraLayerIndex !== undefined) {
+      const cameraViewport = this.detectCameraViewportSize();
+      if (cameraViewport) {
+        return cameraViewport;
+      }
+    }
+
+    // Default to full document size
+    return { width: this.doc.width, height: this.doc.height };
+  }
+
+  // Detect camera viewport size from the camera symbol and document dimensions
+  private detectCameraViewportSize(): { width: number; height: number } | null {
+    if (!this.doc || this.manualCameraLayerIndex === undefined) return null;
+
+    const timeline = this.doc.timelines[this.currentScene];
+    if (!timeline) return null;
+
+    const cameraLayer = timeline.layers[this.manualCameraLayerIndex];
+    if (!cameraLayer || cameraLayer.frames.length === 0) return null;
+
+    const firstFrame = cameraLayer.frames[0];
+    if (firstFrame.elements.length === 0) return null;
+
+    const element = firstFrame.elements[0];
+    if (element.type !== 'symbol') return null;
+
+    // Get camera matrix scale (affects viewport size when zooming)
+    const matrix = element.matrix;
+    const scaleX = Math.sqrt(matrix.a * matrix.a + matrix.b * matrix.b);
+    const scaleY = Math.sqrt(matrix.c * matrix.c + matrix.d * matrix.d);
+
+    // Common animation workflow: ultrawide documents (3840x1080) with 1920x1080 output
+    // The camera pans across the wide document, but output is standard 16:9
+    const docAspect = this.doc.width / this.doc.height;
+
+    let baseWidth: number;
+    let baseHeight: number;
+
+    if (docAspect > 2.5) {
+      // Ultrawide document (e.g., 3840x1080, aspect ~3.56)
+      // Assume standard 16:9 viewport (1920x1080)
+      baseHeight = this.doc.height;
+      baseWidth = baseHeight * (16 / 9);
+    } else if (docAspect > 1.9) {
+      // Wide document but not extreme
+      // Use height and 16:9 aspect
+      baseHeight = this.doc.height;
+      baseWidth = baseHeight * (16 / 9);
+    } else {
+      // Normal aspect ratio - use document size
+      baseWidth = this.doc.width;
+      baseHeight = this.doc.height;
+    }
+
+    // Apply inverse scale for zoom
+    const viewportWidth = baseWidth / scaleX;
+    const viewportHeight = baseHeight / scaleY;
+
+    if (DEBUG) {
+      console.log(`Camera viewport: ${Math.round(viewportWidth)}x${Math.round(viewportHeight)} (doc: ${this.doc.width}x${this.doc.height}, scale: ${scaleX.toFixed(2)})`);
+    }
+
+    return {
+      width: Math.round(viewportWidth),
+      height: Math.round(viewportHeight)
+    };
+  }
+
+  // Pre-compute all shape paths in the background to warm up cache
+  private precomputeShapePaths(doc: FLADocument): void {
+    const shapes = this.collectAllShapes(doc);
+    if (shapes.length === 0) return;
+
+    if (DEBUG) {
+      console.log(`Pre-computing ${shapes.length} shapes...`);
+    }
+
+    // Process shapes in batches to avoid blocking UI
+    const BATCH_SIZE = 10;
+    let index = 0;
+
+    const processBatch = () => {
+      const end = Math.min(index + BATCH_SIZE, shapes.length);
+      for (let i = index; i < end; i++) {
+        this.getOrComputeShapePaths(shapes[i]);
+      }
+      index = end;
+
+      if (index < shapes.length) {
+        // Use requestIdleCallback if available, otherwise setTimeout
+        if ('requestIdleCallback' in window) {
+          (window as Window & { requestIdleCallback: (cb: () => void) => void }).requestIdleCallback(processBatch);
+        } else {
+          setTimeout(processBatch, 0);
+        }
+      } else if (DEBUG) {
+        console.log(`Pre-computed ${shapes.length} shapes`);
+      }
+    };
+
+    // Start processing after a short delay to not block initial render
+    setTimeout(processBatch, 16);
+  }
+
+  // Collect all shapes from document (main timeline + all symbols)
+  private collectAllShapes(doc: FLADocument): Shape[] {
+    const shapes: Shape[] = [];
+
+    const processTimeline = (timeline: Timeline) => {
+      for (const layer of timeline.layers) {
+        for (const frame of layer.frames) {
+          for (const element of frame.elements) {
+            if (element.type === 'shape') {
+              shapes.push(element);
+            }
+          }
+        }
+      }
+    };
+
+    // Process main timeline
+    for (const timeline of doc.timelines) {
+      processTimeline(timeline);
+    }
+
+    // Process all symbols
+    for (const symbol of doc.symbols.values()) {
+      processTimeline(symbol.timeline);
+    }
+
+    return shapes;
+  }
+
+  renderFrame(frameIndex: number): void {
+    if (!this.doc) return;
+
+    this.rigMatrixCache = new WeakMap();
+
+    const ctx = this.ctx;
+    const doc = this.doc;
+
+    // Clear debug elements for this frame
+    if (this.debugMode) {
+      this.debugElements = [];
+      this.debugSymbolPath = [];
+    }
+
+    // Fully reset canvas state
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+    // Get effective viewport size
+    const viewport = this.getEffectiveViewportSize();
+
+    // Apply DPR, auto-fit scale, and manual zoom together; pan offsets are in CSS pixels
+    const combinedScale = this.scale * this.zoomLevel * this.dpr;
+    ctx.setTransform(combinedScale, 0, 0, combinedScale, this.panX * this.dpr, this.panY * this.dpr);
+    this.stageBaseInverse = ctx.getTransform().inverse();
+
+    // Fill with background color (fill the viewport area)
+    ctx.fillStyle = doc.backgroundColor;
+    ctx.fillRect(0, 0, viewport.width, viewport.height);
+
+    // Render current scene's timeline
+    this.touchedMovieClips.clear();
+    this.instanceStack = [];
+    if (doc.timelines.length > this.currentScene) {
+      this.renderTimelineWithCamera(doc.timelines[this.currentScene], frameIndex, viewport);
+    }
+    // Movie clips not on stage this frame are gone; placed again, they start over.
+    for (const key of this.movieClipStates.keys()) {
+      if (!this.touchedMovieClips.has(key)) this.movieClipStates.delete(key);
+    }
+  }
+
+  // Render timeline with proper camera handling
+  private renderTimelineWithCamera(
+    timeline: Timeline,
+    frameIndex: number,
+    viewport: { width: number; height: number }
+  ): void {
+    const ctx = this.ctx;
+
+    // Check if we're following camera
+    if (this.followCamera && this.manualCameraLayerIndex !== undefined) {
+      const cameraLayer = timeline.layers[this.manualCameraLayerIndex];
+      if (cameraLayer) {
+        const cameraElement = this.getCameraElement(cameraLayer, frameIndex);
+        if (cameraElement) {
+          ctx.save();
+
+          // The camera symbol's transformation point is the pivot/center of the viewport frame
+          // The matrix tx/ty positions the symbol's origin on the document
+          // The actual camera center on the document is the matrix applied to the transformation point
+
+          // Animate's native camera and layer depth draw every layer through
+          // its stage view, the ramka layer included: follow the ramka where
+          // that view puts it.
+          const stageViews = this.doc
+            ? stageLayerViews(timeline.layers, frameIndex, this.getNativeCamera(timeline, frameIndex), this.doc.width, this.doc.height)
+            : null;
+          const ramkaView = stageViews?.matrices[this.manualCameraLayerIndex];
+          const matrix = ramkaView ? multiplyMatrices(ramkaView, cameraElement.matrix) : cameraElement.matrix;
+          const tp = cameraElement.transformationPoint || { x: 0, y: 0 };
+
+          const scaleX = Math.sqrt(matrix.a * matrix.a + matrix.b * matrix.b);
+          const scaleY = Math.sqrt(matrix.c * matrix.c + matrix.d * matrix.d);
+
+          // Camera center in document coordinates (turned with the ramka, and
+          // with the native camera's view)
+          const cameraCenterX = matrix.a * tp.x + matrix.c * tp.y + matrix.tx;
+          const cameraCenterY = matrix.b * tp.x + matrix.d * tp.y + matrix.ty;
+
+          // Viewport center
+          const viewportCenterX = viewport.width / 2;
+          const viewportCenterY = viewport.height / 2;
+
+          if (DEBUG) {
+            console.log(`Camera: center=(${cameraCenterX.toFixed(1)}, ${cameraCenterY.toFixed(1)}), scale=(${scaleX.toFixed(3)}, ${scaleY.toFixed(3)}), tp=(${tp.x}, ${tp.y})`);
+          }
+
+          // Transform: move camera center to viewport center, apply inverse scale
+          ctx.translate(viewportCenterX, viewportCenterY);
+          ctx.scale(1 / scaleX, 1 / scaleY);
+          ctx.translate(-cameraCenterX, -cameraCenterY);
+
+          // Following the camera only frames the view: 3D instances still
+          // project in stage space.
+          const stageBaseInverse = this.stageBaseInverse;
+          this.stageBaseInverse = ctx.getTransform().inverse();
+
+          // Render all layers except camera, still through Animate's native
+          // camera and layer depth
+          this.renderTimelineLayers(timeline, frameIndex, 0, this.manualCameraLayerIndex, stageViews);
+
+          ctx.restore();
+          this.stageBaseInverse = stageBaseInverse;
+          return;
+        }
+      }
+    }
+
+    // Normal rendering (no camera following)
+    this.renderTimeline(timeline, frameIndex);
+  }
+
+  // Delegates to the shared visibility-cascade helper (src/layer-utils.ts) so the
+  // canvas renderer and the SVG/video exporter agree on which layers are hidden.
+  // A layer is hidden if it — or any ancestor it is linked under via
+  // parentLayerIndex (its folder/group, or the layer it is parented to) — is
+  // marked visible="false". Only the visibility *flag* cascades here; rig
+  // (layer-parenting) transforms are composed in renderLayer via getRigCorrection.
+  private isLayerVisibleInFla(layers: Layer[], index: number): boolean {
+    return isLayerVisibleInFla(layers, index);
+  }
+
+  // Render a timeline's layers in paint order, skipping `skipLayerIndex` (the
+  // camera layer), each main-timeline layer in its native camera/layer depth
+  // view when `stageViews` is given.
+  private renderTimelineLayers(
+    timeline: Timeline,
+    frameIndex: number,
+    depth: number,
+    skipLayerIndex?: number,
+    stageViews: StageLayerViews | null = null
+  ): void {
+    // Render layers based on layerOrder setting (main) or nestedLayerOrder (nested symbols)
+    const order = depth === 0 ? this.layerOrder : this.nestedLayerOrder;
+    const timelineOrder = order === 'reverse'
+      ? [...Array(timeline.layers.length).keys()].reverse()  // [len-1, len-2, ..., 0]
+      : [...Array(timeline.layers.length).keys()];           // [0, 1, ..., len-1]
+    const indices = stageViews ? sortByStageDepth(timelineOrder, stageViews) : timelineOrder;
+
+    // Track which layers are masked and their mask layer index
+    const maskedLayers = new Map<number, number>(); // masked layer index -> mask layer index
+    for (let i = 0; i < timeline.layers.length; i++) {
+      const maskIndex = getMaskLayerIndex(timeline.layers, i);
+      if (maskIndex !== undefined) {
+        maskedLayers.set(i, maskIndex);
+      }
+    }
+
+    // Track which masked layers have been rendered
+    const renderedMasked = new Set<number>();
+
+    for (const i of indices) {
+      const layer = timeline.layers[i];
+
+      // Skip camera layer (it's a reference, not rendered content)
+      if (i === skipLayerIndex) {
+        continue;
+      }
+
+      // Skip hidden layers (only for main timeline, depth 0)
+      if (depth === 0 && this.hiddenLayers.has(i)) {
+        continue;
+      }
+
+      // Skip reference layers (guides, camera frames, folders, etc.)
+      // These are detected during parsing based on layer type, position, and structure
+      if (timeline.referenceLayers.has(i)) {
+        continue;
+      }
+
+      // Skip if already rendered as part of a mask group
+      if (renderedMasked.has(i)) {
+        continue;
+      }
+
+      // Also skip guide/folder layers that might not have been detected
+      const layerTypeLower = (layer.layerType as string)?.toLowerCase() || '';
+      const isGuideLayer = layer.layerType === 'guide' || layerTypeLower === 'guide';
+      const isFolderLayer = layer.layerType === 'folder' || layerTypeLower === 'folder';
+
+      if (isGuideLayer || isFolderLayer) {
+        continue;
+      }
+
+      // Honor FLA layer visibility (with folder/parent cascade). Mask layers
+      // are handled by their own block below.
+      if (layer.layerType !== 'mask' && layerTypeLower !== 'mask' &&
+          !this.isLayerVisibleInFla(timeline.layers, i)) {
+        continue;
+      }
+
+      // Check if this is a mask layer
+      if (layer.layerType === 'mask' || layerTypeLower === 'mask') {
+        // A hidden mask hides its whole group (the mask and everything masked
+        // by it). Honor the mask layer's own visibility before rendering.
+        if (layer.visible === false) continue;
+
+        // Find all layers masked by this layer, in the same paint order as the
+        // timeline (so masked layers keep their relative stacking).
+        const maskedByThis: number[] = [];
+        for (const maskedIdx of indices) {
+          if (maskedLayers.get(maskedIdx) === i) {
+            maskedByThis.push(maskedIdx);
+            renderedMasked.add(maskedIdx);
+          }
+        }
+
+        if (maskedByThis.length > 0) {
+          // Render mask layer with clipping
+          this.renderMaskGroup(timeline, frameIndex, depth, i, maskedByThis, stageViews);
+        }
+        continue; // Don't render mask layer normally
+      }
+
+      // Skip masked layers - they'll be rendered as part of their mask group
+      if (maskedLayers.has(i)) {
+        continue;
+      }
+
+      this.withStageView(stageViews, i, () => this.renderLayer(layer, frameIndex, depth, i, timeline.layers));
+    }
+  }
+
+  // Render a mask layer and its masked children
+  private renderMaskGroup(
+    timeline: Timeline,
+    frameIndex: number,
+    depth: number,
+    maskLayerIndex: number,
+    maskedLayerIndices: number[],
+    stageViews: StageLayerViews | null = null
+  ): void {
+    const ctx = this.ctx;
+    const maskLayer = timeline.layers[maskLayerIndex];
+    // The mask's own camera/depth view (null: behind the camera, so no mask area).
+    const maskView = stageViews ? stageViews.matrices[maskLayerIndex] : undefined;
+
+    // Find the frame at the current index for the mask layer. With no mask
+    // content (empty keyframe, or past the mask layer's last frame) the masked
+    // layers render unclipped, as in a published SWF.
+    const maskFrame = this.findFrameAtIndex(maskLayer.frames, frameIndex);
+    const hasMask = !!maskFrame && maskFrame.elements.length > 0;
+
+    if (hasMask) {
+      ctx.save();
+      // Clip to the union of the mask's fill area. Everything on the mask layer
+      // contributes (shapes, shapes nested in symbol instances at their current
+      // frame, motion/shape-tweened content, text/bitmap/video bounds), collected
+      // into ONE path so overlapping/separate mask shapes union. (Calling
+      // ctx.clip() once per shape intersects them instead.)
+      const clip: MaskClipPaths = { positive: new Path2D(), negative: new Path2D(), positiveCount: 0, negativeCount: 0 };
+      if (maskView !== null) {
+        this.addLayerToMaskPath(maskLayer, frameIndex, maskView ? this.toDOMMatrix(maskView) : new DOMMatrix(), clip, depth);
+      }
+      ctx.clip(this.buildMaskClipPath(clip), 'nonzero');
+    }
+
+    // Render masked layers (within the clip, if any)
+    for (const maskedIdx of maskedLayerIndices) {
+      // Honor each masked child's own visibility (and its parent cascade — its
+      // parentLayerIndex points at the mask, so a hidden mask also hides it).
+      if (!this.isLayerVisibleInFla(timeline.layers, maskedIdx)) continue;
+      if (depth === 0 && this.hiddenLayers.has(maskedIdx)) continue;
+      if (timeline.referenceLayers.has(maskedIdx)) continue;
+      const maskedLayer = timeline.layers[maskedIdx];
+      if (maskedLayer) {
+        this.withStageView(stageViews, maskedIdx, () => this.renderLayer(maskedLayer, frameIndex, depth, maskedIdx, timeline.layers));
+      }
+    }
+
+    if (hasMask) {
+      ctx.restore();
+    }
+  }
+
+  // Add one fill region to a mask clip, sorted by its on-screen winding
+  // direction (sign of its signed area times the transform's determinant).
+  private addMaskRegion(clip: MaskClipPaths, region: Path2D, transform: DOMMatrix, signedArea: number): void {
+    const det = transform.a * transform.d - transform.b * transform.c;
+    if (signedArea * det < 0) {
+      clip.negative.addPath(region, transform);
+      clip.negativeCount++;
+    } else {
+      clip.positive.addPath(region, transform);
+      clip.positiveCount++;
+    }
+  }
+
+  // Combine a mask's regions into one path whose nonzero fill is their UNION,
+  // whatever direction each region winds in. Regions of one direction never
+  // cancel each other, but a clockwise and a counter-clockwise region cancel
+  // where they overlap (mirrored instances, text/bitmap bounds next to shapes,
+  // shapes whose fills are on opposite edge sides). So the smaller group is
+  // repeated more times than the larger group can wind (each region winds at
+  // most once), leaving every covered point with a nonzero total.
+  private buildMaskClipPath(clip: MaskClipPaths): Path2D {
+    if (clip.negativeCount === 0) return clip.positive;
+    if (clip.positiveCount === 0) return clip.negative;
+    const positiveIsBase = clip.positiveCount >= clip.negativeCount;
+    const base = positiveIsBase ? clip.positive : clip.negative;
+    const repeated = positiveIsBase ? clip.negative : clip.positive;
+    const repeats = (positiveIsBase ? clip.positiveCount : clip.negativeCount) + 1;
+    const path = new Path2D(base);
+    for (let i = 0; i < repeats; i++) path.addPath(repeated);
+    return path;
+  }
+
+  // Add the fill area of a layer's content at `frameIndex` to a mask clip.
+  // `transform` maps the layer's coordinate space into the space the clip is
+  // applied in. Mirrors renderLayer's frame/tween resolution.
+  private addLayerToMaskPath(
+    layer: Layer,
+    frameIndex: number,
+    transform: DOMMatrix,
+    clip: MaskClipPaths,
+    depth: number
+  ): void {
+    const frame = this.findFrameAtIndex(layer.frames, frameIndex);
+    if (!frame) return;
+
+    const nextKeyframe = this.findNextKeyframe(layer.frames, frame);
+    const isTween = frame.tweenType === 'motion' || frame.tweenType === 'shape';
+    const progress = isTween && nextKeyframe
+      ? this.calculateTweenProgress(frameIndex, frame, nextKeyframe, frame.acceleration, frame.tweens)
+      : 0;
+
+    frame.elements.forEach((element, elementIndex) => {
+      this.enterKeyframe(layer, frame);
+
+      // Shape tween: the interpolated morph segments renderMorphShape fills
+      // are the mask geometry.
+      if (frame.tweenType === 'shape' && frame.morphShape && element.type === 'shape') {
+        const m = transform.multiply(this.toDOMMatrix(element.matrix));
+        for (const segment of frame.morphShape.segments) {
+          const fillIndex = segment.fillIndex1 ?? segment.fillIndex2;
+          if (fillIndex === undefined || !element.fills.some((f) => f.index === fillIndex)) continue;
+          const region = this.buildMorphSegmentPath(segment, progress);
+          this.addMaskRegion(clip, region, m, this.morphSegmentArea(segment, progress));
+        }
+        return;
+      }
+
+      // Motion tween: interpolate the symbol's matrix like renderLayer does.
+      let maskElement: DisplayElement = element;
+      if (frame.tweenType === 'motion' && nextKeyframe && nextKeyframe.elements.length > 0 &&
+          element.type === 'symbol') {
+        const next = this.findTweenPartner(element, elementIndex, nextKeyframe);
+        if (next.type === 'symbol') {
+          maskElement = withInstanceMatrix(element, this.interpolateTweenMatrix(element.matrix, next.matrix, progress, frame));
+        }
+      }
+
+      if (frame.motionObject) {
+        maskElement = this.applyMotionObject(frame, element, frameIndex);
+      }
+      maskElement = applyIKPose(frame, maskElement, elementIndex, frameIndex);
+
+      this.addElementToMaskPath(maskElement, transform, clip, depth, frameIndex, elementIndex);
+    });
+  }
+
+  // Add one display element's fill area to a mask clip. Strokes are ignored:
+  // in Animate only fills define a mask.
+  private addElementToMaskPath(
+    element: DisplayElement,
+    transform: DOMMatrix,
+    clip: MaskClipPaths,
+    depth: number,
+    parentFrameIndex: number,
+    elementIndex: number
+  ): void {
+    const m = transform.multiply(this.toDOMMatrix(element.matrix));
+
+    if (element.type === 'shape') {
+      // Only the fills renderShape paints (the index has a FillStyle).
+      const { fillPaths, fillAreas } = this.getOrComputeShapePaths(element);
+      for (const [styleIndex, fillPath] of fillPaths) {
+        if (!element.fills.some((f) => f.index === styleIndex)) continue;
+        this.addMaskRegion(clip, fillPath, m, fillAreas.get(styleIndex) ?? 0);
+      }
+    } else if (element.type === 'symbol') {
+      if (!this.doc || depth > 50 || element.isVisible === false) return;
+      const symbol = getWithNormalizedPath(this.doc.symbols, element.libraryItemName);
+      if (!symbol) return;
+
+      const slot = this.instanceSlot(element.libraryItemName, elementIndex);
+      const symbolFrame = this.getSymbolFrame(element, symbol, parentFrameIndex, elementIndex);
+      this.instanceStack.push({ slot, clock: this.resolvedClock });
+      const layers = symbol.timeline.layers;
+      for (let i = 0; i < layers.length; i++) {
+        const type = (layers[i].layerType as string | undefined)?.toLowerCase();
+        // Guides/folders never render; a nested mask layer's own content is
+        // not drawn either (its masked layers still contribute).
+        if (type === 'guide' || type === 'folder' || type === 'mask') continue;
+        if (symbol.timeline.referenceLayers.has(i)) continue;
+        if (!this.isLayerVisibleInFla(layers, i)) continue;
+        this.addLayerToMaskPath(layers[i], symbolFrame, m, clip, depth + 1);
+      }
+      this.instanceStack.pop();
+    } else {
+      // Text, bitmaps and video mask by their bounding box.
+      let x = 0;
+      let width: number;
+      let height: number;
+      if (element.type === 'text') {
+        x = element.left;
+        width = element.width;
+        height = element.height;
+      } else if (element.type === 'bitmap') {
+        const bitmapItem = this.doc ? getWithNormalizedPath(this.doc.bitmaps, element.libraryItemName) : undefined;
+        const img = bitmapItem?.imageData;
+        width = img ? (img.naturalWidth || img.width) : (bitmapItem?.width ?? 0);
+        height = img ? (img.naturalHeight || img.height) : (bitmapItem?.height ?? 0);
+      } else {
+        width = element.width;
+        height = element.height;
+      }
+      const rect = new Path2D();
+      rect.rect(x, 0, width, height);
+      this.addMaskRegion(clip, rect, m, width * height);
+    }
+  }
+
+  private toDOMMatrix(matrix: Matrix): DOMMatrix {
+    return new DOMMatrix([matrix.a, matrix.b, matrix.c, matrix.d, matrix.tx, matrix.ty]);
+  }
+
+  private renderTimeline(timeline: Timeline, frameIndex: number, depth: number = 0): void {
+    if (depth > 50) return; // Prevent infinite recursion
+
+    const ctx = this.ctx;
+
+    // Animate's native camera and layer depth (main timeline only): each layer
+    // gets its own stage transform, and layers stack by depth. Null when
+    // neither applies at this frame.
+    const nativeCamera = depth === 0 ? this.getNativeCamera(timeline, frameIndex) : null;
+    const stageViews = depth === 0 && this.doc
+      ? stageLayerViews(timeline.layers, frameIndex, nativeCamera, this.doc.width, this.doc.height)
+      : null;
+
+    // Determine which camera layer to use (if any)
+    // Manual follow camera takes precedence over auto-detected camera
+    let activeCameraIndex: number | undefined;
+    if (depth === 0) {
+      if (this.followCamera && this.manualCameraLayerIndex !== undefined) {
+        activeCameraIndex = this.manualCameraLayerIndex;
+      } else if (!nativeCamera) {
+        activeCameraIndex = timeline.cameraLayerIndex;
+      }
+    }
+
+    // Apply camera transform at root level only
+    let hasCameraTransform = false;
+    const stageBaseInverse = this.stageBaseInverse;
+    if (depth === 0 && activeCameraIndex !== undefined) {
+      const cameraLayer = timeline.layers[activeCameraIndex];
+      if (cameraLayer) {
+        const cameraTransform = this.getCameraTransform(cameraLayer, frameIndex);
+        if (cameraTransform) {
+          ctx.save();
+          // Apply inverse camera transform to simulate camera movement
+          this.applyInverseCameraTransform(cameraTransform);
+          // A ramka only frames the view: 3D instances still project in stage space.
+          this.stageBaseInverse = ctx.getTransform().inverse();
+          hasCameraTransform = true;
+        }
+      }
+    }
+
+    this.renderTimelineLayers(timeline, frameIndex, depth, activeCameraIndex, stageViews);
+
+    if (hasCameraTransform) {
+      ctx.restore();
+      this.stageBaseInverse = stageBaseInverse;
+    }
+  }
+
+  private getCameraTransform(cameraLayer: Layer, frameIndex: number): Matrix | null {
+    return this.getCameraElement(cameraLayer, frameIndex)?.matrix ?? null;
+  }
+
+  // Animate's native camera at a frame: its `__Camera__` instance's matrix
+  // (tweened like any instance) and the camera layer's depth.
+  private getNativeCamera(timeline: Timeline, frameIndex: number): StageCamera | null {
+    const index = timeline.nativeCameraLayerIndex;
+    const cameraLayer = index !== undefined ? timeline.layers[index] : undefined;
+    if (!cameraLayer) return null;
+    const matrix = this.getCameraTransform(cameraLayer, frameIndex);
+    return matrix ? { matrix, zDepth: layerZDepthAt(cameraLayer, frameIndex) } : null;
+  }
+
+  // Draw a main-timeline layer through its native camera/layer depth view.
+  // A layer behind the camera is not drawn.
+  private withStageView(stageViews: StageLayerViews | null, layerIndex: number, draw: () => void): void {
+    if (!stageViews) {
+      draw();
+      return;
+    }
+    const view = stageViews.matrices[layerIndex];
+    if (!view) return;
+    this.ctx.save();
+    this.applyMatrix(view);
+    draw();
+    this.ctx.restore();
+  }
+
+  // The camera (ramka or native) instance at a frame: its first symbol
+  // instance, tweened like any classic-tweened instance. Follow camera mode
+  // also reads its transformation point (the pivot doesn't change in a tween).
+  private getCameraElement(cameraLayer: Layer, frameIndex: number): SymbolInstance | null {
+    const frame = this.findFrameAtIndex(cameraLayer.frames, frameIndex);
+    if (!frame || frame.elements.length === 0) return null;
+
+    const element = frame.elements[0];
+    if (element.type !== 'symbol') return null;
+
+    if (frame.tweenType === 'motion') {
+      const nextKeyframe = this.findNextKeyframe(cameraLayer.frames, frame);
+      if (nextKeyframe && nextKeyframe.elements.length > 0) {
+        const nextElement = this.findTweenPartner(element, 0, nextKeyframe);
+        if (nextElement.type === 'symbol') {
+          const progress = this.calculateTweenProgress(
+            frameIndex,
+            frame,
+            nextKeyframe,
+            frame.acceleration,
+            frame.tweens
+          );
+          return { ...element, matrix: this.interpolateTweenMatrix(element.matrix, nextElement.matrix, progress, frame) };
+        }
+      }
+    }
+
+    return this.applyMotionObject(frame, element, frameIndex);
+  }
+
+  /**
+   * An element of a CS4+ object motion tween span (`frame.motionObject`) as it
+   * stands `frameIndex - frame.index` frames into the span: matrix, and color,
+   * 3D rotation and filters when the tween animates them. Other elements pass
+   * through.
+   */
+  private applyMotionObject<T extends DisplayElement>(frame: Frame, element: T, frameIndex: number): T {
+    if (!frame.motionObject || !this.doc) return element;
+    const tp = element.type === 'symbol' ? element.transformationPoint : undefined;
+    const filters = element.type === 'symbol' || element.type === 'text' ? element.filters : undefined;
+    const state = evaluateMotionObject(frame.motionObject, frameIndex - frame.index, this.doc.frameRate, element.matrix, tp, filters);
+    if (element.type === 'text') return { ...element, matrix: state.matrix, ...(state.filters && { filters: state.filters }) };
+    if (element.type !== 'symbol') return { ...element, matrix: state.matrix };
+    return {
+      ...withInstanceMatrix(element, state.matrix),
+      ...(state.colorTransform && { colorTransform: state.colorTransform }),
+      ...(state.rotationX !== undefined && { rotationX: state.rotationX }),
+      ...(state.rotationY !== undefined && { rotationY: state.rotationY }),
+      ...(state.filters && { filters: state.filters }),
+    };
+  }
+
+  private applyInverseCameraTransform(matrix: Matrix): void {
+    // The camera matrix represents where the "camera frame" is positioned
+    // To render content from the camera's perspective, we need the inverse transform
+    //
+    // For a 2D affine matrix [a c tx; b d ty; 0 0 1]:
+    // The inverse is [d -c (c*ty - d*tx); -b a (b*tx - a*ty); 0 0 1] / determinant
+
+    const det = matrix.a * matrix.d - matrix.b * matrix.c;
+    if (Math.abs(det) < 0.0001) return; // Degenerate matrix
+
+    const invDet = 1 / det;
+    const invA = matrix.d * invDet;
+    const invB = -matrix.b * invDet;
+    const invC = -matrix.c * invDet;
+    const invD = matrix.a * invDet;
+    const invTx = (matrix.c * matrix.ty - matrix.d * matrix.tx) * invDet;
+    const invTy = (matrix.b * matrix.tx - matrix.a * matrix.ty) * invDet;
+
+    this.ctx.transform(invA, invB, invC, invD, invTx, invTy);
+  }
+
+  private renderLayer(layer: Layer, frameIndex: number, depth: number, layerIndex?: number, layers?: Layer[]): void {
+    // Find the frame at the current index
+    const frame = this.findFrameAtIndex(layer.frames, frameIndex);
+    if (!frame) return;
+
+    // Note: Reference layer filtering (camera frames, guides, etc.) is handled
+    // in renderTimeline() using timeline.referenceLayers which is populated
+    // by detectReferenceLayers() during parsing. That logic is more accurate
+    // because it considers both layer name AND visibility/outline status.
+
+    // Check if we need to interpolate (tween)
+    const nextKeyframe = this.findNextKeyframe(layer.frames, frame);
+
+    // Get hidden elements for this layer (only for main timeline layers with index)
+    const hiddenSet = layerIndex !== undefined ? this.hiddenElements.get(layerIndex) : undefined;
+
+    // Render elements based on elementOrder setting
+    const elementIndices = this.elementOrder === 'reverse'
+      ? [...Array(frame.elements.length).keys()].reverse()
+      : [...Array(frame.elements.length).keys()];
+
+    // Layer parenting (Animate "rig"): compose the parent's motion since this
+    // child keyframe was authored. Null when not parented / parent static (and
+    // the result would be the stored matrices) / undeterminable — then the
+    // stored (world-space) matrices are used as-is.
+    const rig = layers && layerIndex !== undefined
+      ? this.getRigCorrection(layers, layerIndex, frameIndex, frame, nextKeyframe)
+      : null;
+
+    for (const elementIndex of elementIndices) {
+      // Skip hidden elements (only for main timeline, depth 0)
+      if (depth === 0 && hiddenSet?.has(elementIndex)) continue;
+
+      const element = frame.elements[elementIndex];
+      // Per element: drawing the previous one may have entered nested timelines.
+      this.enterKeyframe(layer, frame);
+
+      if (rig) {
+        this.ctx.save();
+      }
+
+      // Handle shape tweens with morphShape
+      if (frame.tweenType === 'shape' && frame.morphShape && element.type === 'shape') {
+        // Calculate interpolation progress for shape tween
+        const progress = nextKeyframe
+          ? this.calculateTweenProgress(
+              frameIndex,
+              frame,
+              nextKeyframe,
+              frame.acceleration,
+              frame.tweens
+            )
+          : 0;
+
+        this.renderMorphShape(frame.morphShape, element, progress, depth);
+      } else if (frame.tweenType === 'motion' && nextKeyframe && nextKeyframe.elements.length > 0) {
+        // Calculate interpolation progress
+        const progress = this.calculateTweenProgress(
+          frameIndex,
+          frame,
+          nextKeyframe,
+          frame.acceleration,
+          frame.tweens
+        );
+
+        // Find matching element in next keyframe
+        // For symbols, match by libraryItemName; otherwise use same index or first element
+        const nextDisplayElement = this.findTweenPartner(element, elementIndex, nextKeyframe);
+
+        if (rig && rig.endInverse && element.type === 'symbol' && nextDisplayElement.type === 'symbol') {
+          // Interpolate in the parent's local space, then place under the
+          // parent's current world transform:
+          //   world(t) = P(t) * lerp(inv(P(k0)) * C0, inv(P(k1)) * C1)
+          this.applyMatrix(rig.parentNow);
+          this.renderDisplayElementWithTween(
+            withInstanceMatrix(element, multiplyMatrices(rig.startInverse, element.matrix)),
+            withInstanceMatrix(nextDisplayElement, multiplyMatrices(rig.endInverse, nextDisplayElement.matrix)),
+            progress, depth, frameIndex, frame, elementIndex
+          );
+        } else {
+          if (rig) this.applyMatrix(multiplyMatrices(rig.parentNow, rig.startInverse));
+          this.renderDisplayElementWithTween(element, nextDisplayElement, progress, depth, frameIndex, frame, elementIndex);
+        }
+      } else {
+        if (rig) this.applyMatrix(multiplyMatrices(rig.parentNow, rig.startInverse));
+        const posed = applyIKPose(frame, this.applyMotionObject(frame, element, frameIndex), elementIndex, frameIndex);
+        this.renderDisplayElement(posed, depth, frameIndex, elementIndex);
+      }
+
+      if (rig) {
+        this.ctx.restore();
+      }
+    }
+  }
+
+  // The element a motion tween interpolates `element` towards in the next keyframe.
+  private findTweenPartner(element: DisplayElement, elementIndex: number, nextKeyframe: Frame): DisplayElement {
+    if (element.type === 'symbol') {
+      const matchingElement = nextKeyframe.elements.find(
+        (e) => e.type === 'symbol' && e.libraryItemName === element.libraryItemName
+      );
+      if (matchingElement) return matchingElement;
+    } else if (elementIndex < nextKeyframe.elements.length) {
+      return nextKeyframe.elements[elementIndex];
+    }
+    return nextKeyframe.elements[0];
+  }
+
+  /**
+   * Layer-parenting ("rig") correction for a child layer's current keyframe span
+   * (issue #12).
+   *
+   * Animate stores a parented child's keyframe matrices in WORLD space (the
+   * parent's transform is baked in at author time), but evaluates the rig live
+   * between keyframes: the child keeps its offset *relative to the parent* as the
+   * parent moves. With P(t) the parent's world matrix at frame t and the child
+   * keyframe span [k0, k1):
+   *   - holding child:  world(t) = P(t) * inv(P(k0)) * C0
+   *   - tweening child: world(t) = P(t) * lerp(inv(P(k0)) * C0, inv(P(k1)) * C1)
+   * At t = k0 (and k1) this reproduces the stored matrix exactly, and a
+   * holding child under a static parent is drawn as stored, so world-space keys
+   * are never double-transformed. A tweening child is interpolated in the
+   * parent's space even when the parent is static: under a parent that
+   * stretches (say 200% x 100%) a turning child stays a turned copy of its
+   * local self, which interpolating the world matrices would not give.
+   *
+   * Returns null (no composition) when the layer is not rig-parented, when the
+   * parent's transform cannot be determined (parent frame is not exactly one
+   * symbol instance), for shape tweens, or when the parent does not move across
+   * the span and the result would be the stored matrices anyway (a holding
+   * child, or a parent that only turns, scales evenly and moves).
+   */
+  private getRigCorrection(
+    layers: Layer[],
+    layerIndex: number,
+    frameIndex: number,
+    frame: Frame,
+    nextKeyframe: Frame | null
+  ): { parentNow: Matrix; startInverse: Matrix; endInverse: Matrix | null } | null {
+    const parentIndex = getRigParentIndex(layers, layerIndex);
+    if (parentIndex === undefined) return null;
+    if (frame.tweenType === 'shape') return null;
+
+    const parentNow = this.getRigLayerWorldMatrix(layers, parentIndex, frameIndex);
+    const parentAtStart = this.getRigLayerWorldMatrix(layers, parentIndex, frame.index);
+    if (!parentNow || !parentAtStart) return null;
+
+    let parentAtEnd: Matrix | null = null;
+    if (frame.tweenType === 'motion' && nextKeyframe && nextKeyframe.elements.length > 0) {
+      parentAtEnd = this.getRigLayerWorldMatrix(layers, parentIndex, nextKeyframe.index);
+      if (!parentAtEnd) return null;
+    }
+
+    if (matricesNearlyEqual(parentNow, parentAtStart) &&
+        (!parentAtEnd || (matricesNearlyEqual(parentAtEnd, parentAtStart) && isSimilarity(parentAtStart)))) {
+      return null; // parent static across the span: stored matrices are exact
+    }
+
+    const startInverse = invertMatrix(parentAtStart);
+    const endInverse = parentAtEnd ? invertMatrix(parentAtEnd) : null;
+    if (!startInverse || (parentAtEnd && !endInverse)) return null;
+    return { parentNow, startInverse, endInverse };
+  }
+
+  // Per-renderFrame memo of rig layer world matrices, keyed by timeline layers
+  // array then "layerIndex:frameIndex". Each rig level needs its parent at up to
+  // three frames (t, k0, k1), so without this a chain of depth n costs 3^n.
+  private rigMatrixCache = new WeakMap<Layer[], Map<string, Matrix | null>>();
+
+  /**
+   * World matrix of a rig layer's single symbol instance at `frameIndex`, i.e.
+   * exactly the matrix renderLayer draws it with (motion-tween interpolated and
+   * itself rig-composed via getRigCorrection). Null when the layer's frame does
+   * not hold exactly one symbol instance, i.e. the rig transform is
+   * undeterminable. Cycles are impossible: getRigParentIndex breaks them.
+   */
+  private getRigLayerWorldMatrix(layers: Layer[], layerIndex: number, frameIndex: number): Matrix | null {
+    let cache = this.rigMatrixCache.get(layers);
+    if (!cache) {
+      cache = new Map();
+      this.rigMatrixCache.set(layers, cache);
+    }
+    const key = `${layerIndex}:${frameIndex}`;
+    const cached = cache.get(key);
+    if (cached !== undefined) return cached;
+
+    let result: Matrix | null = null;
+    const layer = layers[layerIndex];
+    const frame = layer ? this.findFrameAtIndex(layer.frames, frameIndex) : null;
+    const element = frame && frame.elements.length === 1 ? frame.elements[0] : null;
+    if (layer && frame && element && element.type === 'symbol') {
+      const nextKeyframe = this.findNextKeyframe(layer.frames, frame);
+      // Mirror renderLayer's branches so the rig follows what is drawn.
+      const rig = this.getRigCorrection(layers, layerIndex, frameIndex, frame, nextKeyframe);
+      const partner = frame.tweenType === 'motion' && nextKeyframe && nextKeyframe.elements.length > 0
+        ? this.findTweenPartner(element, 0, nextKeyframe)
+        : null;
+      if (partner && partner.type === 'symbol') {
+        const progress = this.calculateTweenProgress(frameIndex, frame, nextKeyframe!, frame.acceleration, frame.tweens);
+        if (rig && rig.endInverse) {
+          result = multiplyMatrices(rig.parentNow, this.interpolateTweenMatrix(
+            multiplyMatrices(rig.startInverse, element.matrix),
+            multiplyMatrices(rig.endInverse, partner.matrix),
+            progress, frame
+          ));
+        } else {
+          result = this.interpolateTweenMatrix(element.matrix, partner.matrix, progress, frame);
+          if (rig) result = multiplyMatrices(multiplyMatrices(rig.parentNow, rig.startInverse), result);
+        }
+      } else {
+        const matrix = applyIKPose(frame, this.applyMotionObject(frame, element, frameIndex), 0, frameIndex).matrix;
+        result = rig
+          ? multiplyMatrices(multiplyMatrices(rig.parentNow, rig.startInverse), matrix)
+          : matrix;
+      }
+    }
+    cache.set(key, result);
+    return result;
+  }
+
+  private findFrameAtIndex(frames: Frame[], index: number): Frame | null {
+    for (const frame of frames) {
+      if (index >= frame.index && index < frame.index + frame.duration) {
+        return frame;
+      }
+    }
+    return null;
+  }
+
+  private findNextKeyframe(frames: Frame[], currentFrame: Frame): Frame | null {
+    const nextIndex = currentFrame.index + currentFrame.duration;
+    for (const frame of frames) {
+      if (frame.index === nextIndex) {
+        return frame;
+      }
+    }
+    return null;
+  }
+
+  private calculateTweenProgress(
+    frameIndex: number,
+    startFrame: Frame,
+    _endFrame: Frame,
+    acceleration?: number,
+    tweens?: Tween[]
+  ): number {
+    const frameOffset = frameIndex - startFrame.index;
+    // Guard against division by zero (duration should never be 0, but protect anyway)
+    let progress = startFrame.duration > 0 ? frameOffset / startFrame.duration : 0;
+
+    // Apply easing
+    if (tweens && tweens.length > 0) {
+      // A frame can carry multiple eases per target ("all", "position", "rotation",
+      // "scale", "color", "filters"). The spatial motion follows "all"/"position";
+      // pick that tween rather than blindly using tweens[0] (which could be a
+      // non-matching target and render as no-easing).
+      const tween = this.selectTween(tweens);
+      if (tween.customEase && tween.customEase.length >= 4) {
+        progress = this.evaluateBezierEase(progress, tween.customEase);
+      } else if (tween.method) {
+        // CreateJS-style "<base><Direction>" token (e.g. "cubicIn", "backOut").
+        // "none" => linear; unknown tokens warn and fall back to linear.
+        progress = this.applyEaseMethod(progress, tween.method, tween.intensity);
+      } else if (tween.intensity !== undefined) {
+        // Legacy intensity-only ease (no method): sign = ease-in/out direction.
+        progress = this.applyEaseIntensity(progress, tween.intensity);
+      }
+    } else if (acceleration !== undefined) {
+      progress = this.applyEaseIntensity(progress, acceleration);
+    }
+
+    return Math.max(0, Math.min(1, progress));
+  }
+
+  // Choose the tween that governs the spatial motion. Adobe writes one <Ease>/<CustomEase>
+  // per target; "all" eases everything, otherwise "position" drives the visible movement.
+  private selectTween(tweens: Tween[]): Tween {
+    return (
+      tweens.find((t) => t.target === 'all') ??
+      tweens.find((t) => t.target === 'position') ??
+      tweens[0]
+    );
+  }
+
+  private applyEaseIntensity(t: number, intensity: number): number {
+    // Intensity: -100 to 100
+    // Negative = ease in, Positive = ease out
+    if (intensity === 0) return t;
+
+    const strength = Math.abs(intensity) / 100;
+
+    if (intensity < 0) {
+      // Ease in (slow start)
+      return Math.pow(t, 1 + strength * 2);
+    } else {
+      // Ease out (slow end)
+      return 1 - Math.pow(1 - t, 1 + strength * 2);
+    }
+  }
+
+  // The set of Penner easing families Animate/CreateJS can name. The DIRECTION
+  // is encoded in the method token suffix, not here.
+  private static readonly EASE_BASES: ReadonlySet<string> = new Set<EaseBase>([
+    'quad', 'cubic', 'quart', 'quint', 'sine', 'circ', 'expo', 'back', 'elastic', 'bounce',
+  ]);
+
+  // Decompose a CreateJS-style method token into (base, direction). The
+  // direction is the SUFFIX: "InOut" (checked first), "In", or "Out". The
+  // remainder is the base family (e.g. "cubicInOut" => base="cubic",
+  // dir="inOut"; "backOut" => base="back", dir="out"). Returns null for tokens
+  // we don't understand so the caller can surface a warning.
+  private parseEaseMethod(method: string): { base: EaseBase; direction: EaseDirection } | null {
+    let base = method;
+    let direction: EaseDirection;
+    if (method.endsWith('InOut')) {
+      direction = 'inOut';
+      base = method.slice(0, -'InOut'.length);
+    } else if (method.endsWith('In')) {
+      direction = 'in';
+      base = method.slice(0, -'In'.length);
+    } else if (method.endsWith('Out')) {
+      direction = 'out';
+      base = method.slice(0, -'Out'.length);
+    } else {
+      return null;
+    }
+    if (!FLARenderer.EASE_BASES.has(base)) return null;
+    return { base: base as EaseBase, direction };
+  }
+
+  // Apply a CreateJS-style "<base><Direction>" easing token (e.g. "cubicIn",
+  // "backOut", "quadInOut") using the standard Penner equations. The direction
+  // comes from the TOKEN SUFFIX (not the intensity sign). When `intensity` is
+  // also present it acts as a strength percentage that blends linear->curve
+  // (100 = full); absent => full strength.
+  private applyEaseMethod(t: number, method: string, intensity?: number): number {
+    if (method === 'none') return t;
+
+    const parsed = this.parseEaseMethod(method);
+    if (!parsed) {
+      // Do not silently swallow: surface the unrecognized token, fall back linear.
+      console.warn(`Unrecognized tween ease method "${method}"; rendering linearly.`);
+      return t;
+    }
+
+    let eased: number;
+    if (parsed.direction === 'in') {
+      eased = this.easeIn(t, parsed.base);
+    } else if (parsed.direction === 'out') {
+      eased = this.easeOut(t, parsed.base);
+    } else {
+      eased = this.easeInOut(t, parsed.base);
+    }
+
+    // If Animate attached an intensity to a method, treat it as a strength
+    // percentage blending between linear and the full curve. No intensity (or
+    // 0) => full strength curve.
+    const strength = intensity ? Math.min(Math.abs(intensity), 100) / 100 : 1;
+    return t + (eased - t) * strength;
+  }
+
+  // Penner ease-in equations on normalized t in [0,1].
+  private easeIn(t: number, base: EaseBase): number {
+    switch (base) {
+      case 'quad': return t * t;
+      case 'cubic': return t * t * t;
+      case 'quart': return t * t * t * t;
+      case 'quint': return t * t * t * t * t;
+      case 'sine': return 1 - Math.cos((t * Math.PI) / 2);
+      case 'expo': return t === 0 ? 0 : Math.pow(2, 10 * (t - 1));
+      case 'circ': return 1 - Math.sqrt(1 - t * t);
+      case 'back': {
+        // Overshoot constant 1.7 matches Adobe/CreateJS Ease.backIn = getBackIn(1.7).
+        const s = 1.7;
+        return t * t * ((s + 1) * t - s);
+      }
+      case 'elastic': {
+        if (t === 0 || t === 1) return t;
+        const p = 0.3;
+        const s = p / 4;
+        return -Math.pow(2, 10 * (t - 1)) * Math.sin(((t - 1 - s) * (2 * Math.PI)) / p);
+      }
+      case 'bounce': return 1 - this.bounceOut(1 - t);
+    }
+  }
+
+  // Penner ease-out equations on normalized t in [0,1].
+  private easeOut(t: number, base: EaseBase): number {
+    switch (base) {
+      case 'quad': return 1 - (1 - t) * (1 - t);
+      case 'cubic': return 1 + Math.pow(t - 1, 3);
+      case 'quart': return 1 - Math.pow(1 - t, 4);
+      case 'quint': return 1 + Math.pow(t - 1, 5);
+      case 'sine': return Math.sin((t * Math.PI) / 2);
+      case 'expo': return t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+      case 'circ': return Math.sqrt(1 - (t - 1) * (t - 1));
+      case 'back': {
+        // Overshoot constant 1.7 matches Adobe/CreateJS Ease.backOut = getBackOut(1.7).
+        const s = 1.7;
+        const u = t - 1;
+        return u * u * ((s + 1) * u + s) + 1;
+      }
+      case 'elastic': {
+        if (t === 0 || t === 1) return t;
+        const p = 0.3;
+        const s = p / 4;
+        return Math.pow(2, -10 * t) * Math.sin(((t - s) * (2 * Math.PI)) / p) + 1;
+      }
+      case 'bounce': return this.bounceOut(t);
+    }
+  }
+
+  // Penner ease-in-out equations on normalized t in [0,1].
+  private easeInOut(t: number, base: EaseBase): number {
+    if (base === 'bounce') {
+      return t < 0.5
+        ? (1 - this.bounceOut(1 - 2 * t)) / 2
+        : (1 + this.bounceOut(2 * t - 1)) / 2;
+    }
+    if (base === 'elastic') {
+      if (t === 0 || t === 1) return t;
+      const p = 0.45;
+      const s = p / 4;
+      const u = 2 * t - 1;
+      if (u < 0) {
+        return -0.5 * Math.pow(2, 10 * u) * Math.sin(((u - s) * (2 * Math.PI)) / p);
+      }
+      return 0.5 * Math.pow(2, -10 * u) * Math.sin(((u - s) * (2 * Math.PI)) / p) + 1;
+    }
+    if (base === 'back') {
+      // CreateJS getBackInOut scales the overshoot by 1.525 before applying the
+      // symmetric halves, so backInOut overshoots more than the generic
+      // ease-in/ease-out split would (Ease.backInOut = getBackInOut(1.7)).
+      const s = 1.7 * 1.525;
+      let u = t * 2;
+      if (u < 1) {
+        return 0.5 * (u * u * ((s + 1) * u - s));
+      }
+      u -= 2;
+      return 0.5 * (u * u * ((s + 1) * u + s) + 2);
+    }
+    // The remaining families are symmetric: ease-in for the first half,
+    // ease-out for the second half.
+    return t < 0.5
+      ? this.easeIn(2 * t, base) / 2
+      : 0.5 + this.easeOut(2 * t - 1, base) / 2;
+  }
+
+  // Penner bounce-out: a series of decaying parabolic bounces.
+  private bounceOut(t: number): number {
+    const n = 7.5625;
+    const d = 2.75;
+    if (t < 1 / d) {
+      return n * t * t;
+    } else if (t < 2 / d) {
+      const u = t - 1.5 / d;
+      return n * u * u + 0.75;
+    } else if (t < 2.5 / d) {
+      const u = t - 2.25 / d;
+      return n * u * u + 0.9375;
+    } else {
+      const u = t - 2.625 / d;
+      return n * u * u + 0.984375;
+    }
+  }
+
+  private evaluateBezierEase(t: number, points: Point[]): number {
+    // Adobe CustomEase curves are PIECEWISE cubic beziers with 3n+1 points
+    // (n cubic segments). Points are anchor/control/control/anchor repeating with
+    // shared anchors, so a 7-point curve is 2 segments, 10 points is 3, etc.
+    if (points.length < 4) return t;
+
+    // Locate the segment whose x-range contains t. Segment i spans anchors
+    // points[3i] .. points[3i+3]; anchors are monotonically increasing in x.
+    const segmentCount = Math.floor((points.length - 1) / 3);
+    let seg = 0;
+    for (; seg < segmentCount - 1; seg++) {
+      if (t <= points[3 * (seg + 1)].x) break;
+    }
+
+    const p0 = points[3 * seg];
+    const p1 = points[3 * seg + 1];
+    const p2 = points[3 * seg + 2];
+    const p3 = points[3 * seg + 3];
+
+    // Find the bezier parameter `u` that yields x == t via Newton-Raphson,
+    // seeded by linearly mapping t into the segment's x-range.
+    const span = p3.x - p0.x;
+    let u = span > 0 ? (t - p0.x) / span : 0;
+    u = Math.max(0, Math.min(1, u));
+    for (let i = 0; i < 10; i++) {
+      const bx = this.cubicBezier(u, p0.x, p1.x, p2.x, p3.x);
+      const dx = this.cubicBezierDerivative(u, p0.x, p1.x, p2.x, p3.x);
+      if (Math.abs(dx) < 0.0001) break;
+      u = u - (bx - t) / dx;
+    }
+    u = Math.max(0, Math.min(1, u));
+
+    return this.cubicBezier(u, p0.y, p1.y, p2.y, p3.y);
+  }
+
+  private cubicBezier(t: number, p0: number, p1: number, p2: number, p3: number): number {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const mt = 1 - t;
+    const mt2 = mt * mt;
+    const mt3 = mt2 * mt;
+    return mt3 * p0 + 3 * mt2 * t * p1 + 3 * mt * t2 * p2 + t3 * p3;
+  }
+
+  private cubicBezierDerivative(t: number, p0: number, p1: number, p2: number, p3: number): number {
+    const t2 = t * t;
+    const mt = 1 - t;
+    const mt2 = mt * mt;
+    return 3 * mt2 * (p1 - p0) + 6 * mt * t * (p2 - p1) + 3 * t2 * (p3 - p2);
+  }
+
+  private renderDisplayElementWithTween(element: DisplayElement, nextDisplayElement: DisplayElement, progress: number, depth: number, parentFrameIndex: number, frame?: Frame, elementIndex: number = 0): void {
+    if (element.type === 'symbol' && nextDisplayElement.type === 'symbol') {
+      // Interpolate matrix transforms
+      const startMatrix = element.matrix;
+      const endMatrix = nextDisplayElement.matrix;
+
+      const interpolatedMatrix = this.interpolateTweenMatrix(startMatrix, endMatrix, progress, frame);
+
+      // Interpolate color transform if either element has one
+      const interpolatedColorTransform = this.lerpColorTransform(
+        element.colorTransform,
+        nextDisplayElement.colorTransform,
+        progress
+      );
+
+      // Note: Do NOT interpolate firstFrame - it's an offset for the keyframe start,
+      // and frameOffset in renderSymbolInstance already handles animation progress.
+      // Interpolating firstFrame would cause double-counting and "lagging" animation.
+      const tweenedDisplayElement: SymbolInstance = {
+        ...withInstanceMatrix(element, interpolatedMatrix),
+        // firstFrame stays as element.firstFrame (the keyframe's starting offset)
+        ...(interpolatedColorTransform && { colorTransform: interpolatedColorTransform })
+      };
+
+      this.renderDisplayElement(tweenedDisplayElement, depth, parentFrameIndex, elementIndex);
+    } else {
+      this.renderDisplayElement(element, depth, parentFrameIndex, elementIndex);
+    }
+  }
+
+  // Interpolate a symbol's matrix across a motion tween (honors rotation and
+  // orient-to-path settings on the tween's start frame).
+  private interpolateTweenMatrix(startMatrix: Matrix, endMatrix: Matrix, progress: number, frame?: Frame): Matrix {
+    let interpolatedMatrix: Matrix;
+
+    // A rotation tween (CW/CCW) turns that way, plus its extra whole turns.
+    const rotate = frame?.motionTweenRotate;
+    const spin = rotate === 'cw' || rotate === 'ccw'
+      ? { direction: rotate, turns: frame?.motionTweenRotateTimes || 0 }
+      : undefined;
+    interpolatedMatrix = interpolateDecomposed(startMatrix, endMatrix, progress, spin);
+
+    // Apply orient-to-path rotation if enabled
+    if (frame?.motionTweenOrientToPath) {
+      interpolatedMatrix = this.applyOrientToPath(
+        interpolatedMatrix,
+        startMatrix,
+        endMatrix
+      );
+    }
+
+    return interpolatedMatrix;
+  }
+
+  /**
+   * Apply orient-to-path rotation to a matrix.
+   * Calculates the tangent angle from the motion path and applies additional rotation.
+   */
+  private applyOrientToPath(
+    interpolatedMatrix: Matrix,
+    startMatrix: Matrix,
+    endMatrix: Matrix
+  ): Matrix {
+    // Calculate the direction of motion (tangent to the path)
+    const dx = endMatrix.tx - startMatrix.tx;
+    const dy = endMatrix.ty - startMatrix.ty;
+
+    // Only apply if there's actual movement
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance < 0.001) {
+      return interpolatedMatrix;
+    }
+
+    // Calculate tangent angle (direction of motion)
+    const tangentAngle = Math.atan2(dy, dx);
+
+    // Extract current scale from the interpolated matrix
+    const scaleX = Math.sqrt(interpolatedMatrix.a * interpolatedMatrix.a + interpolatedMatrix.b * interpolatedMatrix.b);
+    const scaleY = Math.sqrt(interpolatedMatrix.c * interpolatedMatrix.c + interpolatedMatrix.d * interpolatedMatrix.d);
+
+    // Extract current rotation
+    const currentAngle = Math.atan2(interpolatedMatrix.b, interpolatedMatrix.a);
+
+    // The new angle is the tangent angle plus any existing rotation offset
+    // We preserve the relative rotation from the start
+    const startAngle = Math.atan2(startMatrix.b, startMatrix.a);
+    const rotationOffset = currentAngle - startAngle;
+    const newAngle = tangentAngle + rotationOffset;
+
+    // Reconstruct matrix with new rotation
+    const cos = Math.cos(newAngle);
+    const sin = Math.sin(newAngle);
+
+    return {
+      a: cos * scaleX,
+      b: sin * scaleX,
+      c: -sin * scaleY,
+      d: cos * scaleY,
+      tx: interpolatedMatrix.tx,
+      ty: interpolatedMatrix.ty
+    };
+  }
+
+  private lerp(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
+  }
+
+  private lerpColorTransform(start: ColorTransform | undefined, end: ColorTransform | undefined, t: number): ColorTransform | undefined {
+    // If neither has color transform, return undefined
+    if (!start && !end) return undefined;
+
+    // Default values for color transform (identity)
+    const defaultCT: ColorTransform = {
+      alphaMultiplier: 1,
+      redMultiplier: 1,
+      greenMultiplier: 1,
+      blueMultiplier: 1,
+      alphaOffset: 0,
+      redOffset: 0,
+      greenOffset: 0,
+      blueOffset: 0
+    };
+
+    const s = start || defaultCT;
+    const e = end || defaultCT;
+
+    return {
+      alphaMultiplier: this.lerp(s.alphaMultiplier ?? 1, e.alphaMultiplier ?? 1, t),
+      redMultiplier: this.lerp(s.redMultiplier ?? 1, e.redMultiplier ?? 1, t),
+      greenMultiplier: this.lerp(s.greenMultiplier ?? 1, e.greenMultiplier ?? 1, t),
+      blueMultiplier: this.lerp(s.blueMultiplier ?? 1, e.blueMultiplier ?? 1, t),
+      alphaOffset: this.lerp(s.alphaOffset ?? 0, e.alphaOffset ?? 0, t),
+      redOffset: this.lerp(s.redOffset ?? 0, e.redOffset ?? 0, t),
+      greenOffset: this.lerp(s.greenOffset ?? 0, e.greenOffset ?? 0, t),
+      blueOffset: this.lerp(s.blueOffset ?? 0, e.blueOffset ?? 0, t)
+    };
+  }
+
+  private renderDisplayElement(element: DisplayElement, depth: number, parentFrameIndex: number, elementIndex: number = 0): void {
+    if (element.type === 'symbol') {
+      this.renderSymbolInstance(element, depth, parentFrameIndex, elementIndex);
+    } else if (element.type === 'shape') {
+      this.renderShape(element, depth);
+    } else if (element.type === 'video') {
+      this.renderVideoInstance(element, depth);
+    } else if (element.type === 'bitmap') {
+      this.renderBitmapInstance(element, depth);
+    } else if (element.type === 'text') {
+      this.renderTextInstance(element, depth);
+    }
+  }
+
+  private missingSymbols = new Set<string>();
+  private currentKeyframeStart: number = 0;  // Track keyframe start for loop calculation
+
+  // Calculate which frame of a symbol's timeline an instance shows.
+  // In Flash:
+  // - Graphic symbols: sync with parent timeline based on loop mode
+  //   - 'single frame': Always shows the specified firstFrame
+  //   - 'loop': Internal timeline advances with parent, loops when done
+  //   - 'play once': Internal timeline advances, stops at last frame
+  // - MovieClip symbols: play their own timeline independently (use 'play once' for static rendering)
+  // - Button symbols: show first frame (up state)
+  private getSymbolFrame(instance: SymbolInstance, symbol: Symbol, parentFrameIndex: number, elementIndex: number): number {
+    const firstFrame = instance.firstFrame || 0;
+    const lastFrame = instance.lastFrame;
+    const totalSymbolFrames = Math.max(1, symbol.timeline.totalFrames);
+    const parentClock = this.instanceStack[this.instanceStack.length - 1]?.clock ?? rootClock(parentFrameIndex);
+
+    // MovieClips play independently from parent timeline with their own playhead
+    if (instance.symbolType === 'movieclip') {
+      const instanceKey = [...this.instanceStack.map((e) => e.slot), this.instanceSlot(instance.libraryItemName, elementIndex)].join('/');
+      const state = this.getOrCreateMovieClipState(
+        instanceKey,
+        instance,
+        elementIndex,
+        totalSymbolFrames,
+        parentFrameIndex,
+        parentClock,
+        symbol.timeline
+      );
+
+      this.resolvedClock = movieClipClock(state.elapsed, totalSymbolFrames, state.stopFrames ?? new Set<number>());
+      // Use the instance's independent playhead
+      return state.playhead % totalSymbolFrames;
+    }
+
+    // Graphics and buttons follow their parent's clock while their layer holds them.
+    this.resolvedClock = this.currentLayer
+      ? instanceClock(parentClock, this.currentLayer.frames, elementIndex, instance, totalSymbolFrames)
+      : (k) => (k === 0 ? (instance.symbolType === 'button' ? 0 : parentFrameIndex) : undefined);
+
+    // Buttons show first frame (up state) without ActionScript
+    if (instance.symbolType === 'button') {
+      return 0;
+    }
+
+    // Graphic symbols sync with the parent timeline based on their loop mode
+    // (loop / play once / single frame, and Animate 2021's reverse modes).
+    return graphicSymbolFrame(instance.loop, firstFrame, lastFrame, totalSymbolFrames,
+      parentFrameIndex - this.currentKeyframeStart);
+  }
+
+  private renderSymbolInstance(instance: SymbolInstance, depth: number, parentFrameIndex: number, elementIndex: number = 0): void {
+    if (!this.doc) return;
+
+    // Skip rendering if instance is explicitly set to invisible
+    if (instance.isVisible === false) {
+      return;
+    }
+
+    const symbol = getWithNormalizedPath(this.doc.symbols, instance.libraryItemName);
+    if (!symbol) {
+      // Log missing symbols only once
+      if (!this.missingSymbols.has(instance.libraryItemName)) {
+        this.missingSymbols.add(instance.libraryItemName);
+        console.warn('Missing symbol:', JSON.stringify(instance.libraryItemName),
+          'Available:', Array.from(this.doc.symbols.keys()).slice(0, 5).map(k => JSON.stringify(k)));
+      }
+      return;
+    }
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Apply filters if present
+    const hasFilters = instance.filters && instance.filters.length > 0;
+    if (hasFilters) {
+      this.applyFilters(ctx, instance.filters!);
+    }
+
+    // Apply color transform if present
+    const savedAlpha = ctx.globalAlpha;
+    const savedFilter = ctx.filter;
+    if (instance.colorTransform) {
+      this.applyColorTransform(ctx, instance.colorTransform);
+    }
+
+    // Apply blend mode if present
+    const savedCompositeOp = ctx.globalCompositeOperation;
+    if (instance.blendMode) {
+      ctx.globalCompositeOperation = this.mapBlendMode(instance.blendMode);
+    }
+
+    // Track symbol path for debugging
+    if (this.debugMode) {
+      this.debugSymbolPath.push(instance.libraryItemName);
+    }
+
+    // Check if symbol has 9-slice scaling grid
+    const has9SliceGrid = symbol.scale9Grid !== undefined;
+
+    // Check for 3D transforms
+    const has3DTransform = instance.rotationX !== undefined ||
+                           instance.rotationY !== undefined ||
+                           instance.rotationZ !== undefined ||
+                           instance.z !== undefined;
+
+    // Per-channel RGB color transform (covers tint) AND colorMatrix filters
+    // cannot be expressed with CSS/canvas filters reliably (Chromium's 2D
+    // ctx.filter does not honor data-URL SVG feColorMatrix), so when either is
+    // present we render the symbol's subtree into an offscreen buffer, apply the
+    // per-pixel passes (color transform c'=clamp(c*mult+offset); then each
+    // colorMatrix M.[r,g,b,a,1]) on that buffer, then composite the adjusted
+    // buffer back onto the main context. Alpha (globalAlpha), blend mode, and
+    // the OTHER filters (blur/glow/dropShadow — set on the main `ctx` above via
+    // shadow/CSS) are applied exactly once at composite time, so they operate on
+    // the already color-adjusted bitmap (matching Flash's filter stack order:
+    // AdjustColor/ColorMatrix adjusts the bitmap, then blur/glow spread it).
+    const needsRgbColorTransform =
+      !!instance.colorTransform && this.colorTransformAffectsRGB(instance.colorTransform);
+    const needsColorMatrix = this.filtersHaveColorMatrix(instance.filters);
+    const needsPixelPass = needsRgbColorTransform || needsColorMatrix;
+    let colorTransformOffscreen: HTMLCanvasElement | null = null;
+    let mainCtxForColorTransform: CanvasRenderingContext2D | null = null;
+    if (needsPixelPass) {
+      const offscreen = document.createElement('canvas');
+      offscreen.width = this.canvas.width;
+      offscreen.height = this.canvas.height;
+      const offCtx = offscreen.getContext('2d');
+      if (offCtx) {
+        // Render the subtree at the SAME on-screen transform as the main
+        // context currently has (parent transforms + document scale), so the
+        // tinted buffer lines up pixel-for-pixel when composited at identity.
+        offCtx.setTransform(ctx.getTransform());
+        colorTransformOffscreen = offscreen;
+        mainCtxForColorTransform = ctx;
+        this.ctx = offCtx;
+      }
+      // If 2D context is unavailable, fall through and render normally (the
+      // alpha part of the transform is still applied; RGB tint is skipped).
+    }
+
+    // Apply transformation matrix (skip if using 9-slice, handled separately)
+    // Note: The matrix tx/ty already positions the symbol correctly
+    // The transformationPoint is metadata about the pivot, but it's already
+    // accounted for in how the matrix was calculated by Flash
+    if (!has9SliceGrid) {
+      if (has3DTransform) {
+        // Apply 3D transform using perspective projection
+        this.apply3DTransform(instance);
+      } else {
+        this.applyMatrix(instance.matrix);
+      }
+    }
+
+    const slot = this.instanceSlot(instance.libraryItemName, elementIndex);
+    const symbolFrame = this.getSymbolFrame(instance, symbol, parentFrameIndex, elementIndex);
+    // Movie clips nested in this instance are keyed by the instances above them.
+    this.instanceStack.push({ slot, clock: this.resolvedClock });
+
+    if (instance.symbolType === 'button') {
+      // Track button hit area for debug click detection
+      if (this.debugMode && symbol.hitAreaFrame !== undefined) {
+        const hitAreaPath = this.buildButtonHitAreaPath(symbol, symbol.hitAreaFrame);
+        if (hitAreaPath) {
+          this.debugElements.push({
+            type: 'button-hit-area',
+            element: instance,
+            path: hitAreaPath,
+            transform: ctx.getTransform(),
+            depth,
+            parentPath: [...this.debugSymbolPath],
+            isHitArea: true,
+            symbolName: symbol.name
+          });
+        }
+      }
+    }
+
+    // Render symbol's timeline (with 9-slice scaling if applicable)
+    if (has9SliceGrid && symbol.scale9Grid) {
+      this.renderSymbolWith9Slice(symbol, instance, symbol.scale9Grid, symbolFrame, depth);
+    } else if (instance.cacheAsBitmap && symbolFrame === 0 && !this.hasMovieClipInside(symbol)) {
+      // Use cached bitmap rendering for symbols with cacheAsBitmap enabled
+      // Only cache frame 0 to avoid excessive memory usage. Movie clips inside
+      // keep playing, so a symbol holding one is drawn live.
+      this.renderSymbolFromCache(symbol, instance, depth);
+    } else {
+      this.renderTimeline(symbol.timeline, symbolFrame, depth + 1);
+    }
+
+    // If we diverted the subtree to an offscreen buffer for an RGB color
+    // transform and/or a colorMatrix filter, apply the per-pixel passes to that
+    // buffer and composite it back onto the main context. The composite uses the
+    // main context's globalAlpha (alpha applied once), filters (blur/glow/
+    // dropShadow), and blend mode.
+    if (colorTransformOffscreen && mainCtxForColorTransform) {
+      // Restore the main context as the active drawing target.
+      this.ctx = mainCtxForColorTransform;
+      const offCtx = colorTransformOffscreen.getContext('2d');
+      if (offCtx) {
+        const ow = colorTransformOffscreen.width;
+        const oh = colorTransformOffscreen.height;
+        // 1) Color transform (tint) first: c' = clamp(c*mult + offset).
+        if (needsRgbColorTransform && instance.colorTransform) {
+          this.applyColorTransformToImage(offCtx, instance.colorTransform, 0, 0, ow, oh);
+        }
+        // 2) Then each colorMatrix filter (in filter-list order), applied to the
+        //    already color-transformed bitmap. This matches Flash's filter stack:
+        //    the color transform is an instance property applied before filters,
+        //    and ColorMatrix/AdjustColor filters adjust the resulting bitmap.
+        if (needsColorMatrix && instance.filters) {
+          for (const filter of instance.filters) {
+            if (filter.enabled !== false && filter.type === 'colorMatrix' && Array.isArray(filter.matrix) && filter.matrix.length === 20) {
+              this.applyColorMatrixToImage(offCtx, filter.matrix, 0, 0, ow, oh);
+            }
+          }
+        }
+      }
+      // Composite at identity transform: the offscreen already baked in the
+      // parent transform + instance matrix, so draw 1:1. globalAlpha / filter /
+      // blend mode currently on the main ctx are honored here (once) and apply
+      // to the already color-adjusted bitmap.
+      const mainCtx = mainCtxForColorTransform;
+      mainCtx.save();
+      mainCtx.setTransform(1, 0, 0, 1, 0, 0);
+      mainCtx.drawImage(colorTransformOffscreen, 0, 0);
+      mainCtx.restore();
+    }
+
+    // Draw hit area indicator for buttons in debug mode
+    if (this.debugMode && instance.symbolType === 'button' && symbol.hitAreaFrame !== undefined) {
+      this.drawHitAreaIndicator(symbol, symbol.hitAreaFrame);
+    }
+
+    // Pop symbol path for debugging
+    if (this.debugMode) {
+      this.debugSymbolPath.pop();
+    }
+
+    this.instanceStack.pop();
+
+    // Clear filters if applied
+    if (hasFilters) {
+      this.clearFilters(ctx);
+    }
+
+    // Restore color transform state
+    if (instance.colorTransform) {
+      ctx.globalAlpha = savedAlpha;
+      ctx.filter = savedFilter;
+    }
+
+    // Restore blend mode
+    if (instance.blendMode) {
+      ctx.globalCompositeOperation = savedCompositeOp;
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Build a Path2D from the shapes in a button's hit area frame.
+   * The hit area defines the clickable region for the button.
+   */
+  private buildButtonHitAreaPath(symbol: Symbol, hitAreaFrameIndex: number): Path2D | null {
+    const path = new Path2D();
+    let hasContent = false;
+
+    // Iterate through all layers to find shapes at the hit area frame
+    for (const layer of symbol.timeline.layers) {
+      // Skip guide and other non-renderable layers
+      if (layer.layerType === 'guide' || layer.layerType === 'folder') {
+        continue;
+      }
+
+      // Find the frame that contains the hit area frame index
+      for (const frame of layer.frames) {
+        const frameStart = frame.index;
+        const frameEnd = frame.index + frame.duration;
+
+        if (hitAreaFrameIndex >= frameStart && hitAreaFrameIndex < frameEnd) {
+          // This frame covers the hit area frame index
+          for (const element of frame.elements) {
+            if (element.type === 'shape') {
+              // Build path from shape edges
+              const shapePath = this.buildShapePath(element);
+              if (shapePath) {
+                path.addPath(shapePath);
+                hasContent = true;
+              }
+            } else if (element.type === 'symbol') {
+              // For nested symbols, create a bounding rect approximation
+              // This is a simplification - ideally we'd recursively build the path
+              const nestedSymbol = this.doc?.symbols.get(element.libraryItemName);
+              if (nestedSymbol) {
+                // Use a simple rect based on transformation
+                const m = element.matrix;
+                // Approximate bounds (this is simplified)
+                const rect = new Path2D();
+                rect.rect(m.tx - 50, m.ty - 50, 100, 100);
+                path.addPath(rect);
+                hasContent = true;
+              }
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    return hasContent ? path : null;
+  }
+
+  /**
+   * Build a Path2D from a shape's edges (for hit testing).
+   */
+  private buildShapePath(shape: Shape): Path2D | null {
+    const path = new Path2D();
+    let hasContent = false;
+
+    for (const edge of shape.edges) {
+      // Only include edges that have fill or stroke
+      if (edge.fillStyle0 || edge.fillStyle1 || edge.strokeStyle) {
+        for (const cmd of edge.commands) {
+          switch (cmd.type) {
+            case 'M':
+              path.moveTo(cmd.x, cmd.y);
+              hasContent = true;
+              break;
+            case 'L':
+              path.lineTo(cmd.x, cmd.y);
+              break;
+            case 'Q':
+              path.quadraticCurveTo(cmd.cx!, cmd.cy!, cmd.x, cmd.y);
+              break;
+            case 'C':
+              path.bezierCurveTo(cmd.c1x!, cmd.c1y!, cmd.c2x!, cmd.c2y!, cmd.x, cmd.y);
+              break;
+            case 'Z':
+              path.closePath();
+              break;
+          }
+        }
+      }
+    }
+
+    return hasContent ? path : null;
+  }
+
+  /**
+   * Draw a visual indicator showing the button's hit area in debug mode.
+   * The hit area is drawn as a semi-transparent cyan overlay.
+   */
+  private drawHitAreaIndicator(symbol: Symbol, hitAreaFrameIndex: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Draw hit area shapes with semi-transparent cyan fill
+    ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.6)';
+    ctx.lineWidth = 1;
+
+    // Iterate through all layers to find shapes at the hit area frame
+    for (const layer of symbol.timeline.layers) {
+      // Skip guide and other non-renderable layers
+      if (layer.layerType === 'guide' || layer.layerType === 'folder') {
+        continue;
+      }
+
+      // Find the frame that contains the hit area frame index
+      for (const frame of layer.frames) {
+        const frameStart = frame.index;
+        const frameEnd = frame.index + frame.duration;
+
+        if (hitAreaFrameIndex >= frameStart && hitAreaFrameIndex < frameEnd) {
+          // This frame covers the hit area frame index
+          for (const element of frame.elements) {
+            if (element.type === 'shape') {
+              // Draw the shape's path
+              const shapePath = this.buildShapePath(element);
+              if (shapePath) {
+                ctx.fill(shapePath, 'evenodd');
+                ctx.stroke(shapePath);
+              }
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
+  /** Tell the renderer whether the timeline is playing, so embedded videos can
+   *  play/pause in step. Pausing the timeline pauses all cached video elements. */
+  setPlaying(playing: boolean): void {
+    this.playing = playing;
+    if (!playing) {
+      for (const el of this.videoElements.values()) {
+        if (!el.paused) el.pause();
+      }
+    }
+  }
+
+  /** Register a callback the renderer can call to request a re-render (used when
+   *  an embedded video frame becomes available while the timeline is paused). */
+  setNeedsRedrawCallback(cb: (() => void) | null): void {
+    this.onNeedsRedraw = cb;
+  }
+
+  /** Lazily create and cache a muted, looping <video> element for an object URL. */
+  private getVideoElement(url: string): HTMLVideoElement {
+    let el = this.videoElements.get(url);
+    if (!el) {
+      el = document.createElement('video');
+      el.src = url;
+      el.muted = true;
+      el.loop = true;
+      el.playsInline = true;
+      el.preload = 'auto';
+      const requestRedraw = () => this.onNeedsRedraw?.();
+      // Repaint once the first/sought frame is decoded (matters while paused).
+      el.addEventListener('loadeddata', requestRedraw);
+      el.addEventListener('seeked', requestRedraw);
+      el.load();
+      this.videoElements.set(url, el);
+    }
+    return el;
+  }
+
+  /** Pause, detach, and drop all cached video elements (called on new document). */
+  private releaseVideoElements(): void {
+    for (const el of this.videoElements.values()) {
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+    }
+    this.videoElements.clear();
+  }
+
+  private renderVideoInstance(video: VideoInstance, depth: number = 0): void {
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Apply transformation
+    this.applyMatrix(video.matrix);
+
+    // Create path for hit testing
+    if (this.debugMode) {
+      const path = new Path2D();
+      path.rect(0, 0, video.width, video.height);
+      this.debugElements.push({
+        type: 'video',
+        element: video,
+        path,
+        transform: ctx.getTransform(),
+        depth,
+        parentPath: [...this.debugSymbolPath]
+      });
+    }
+
+    // If this video has a decodable embedded stream, draw real frames.
+    const videoItem = this.doc?.videos.get(video.libraryItemName);
+    if (videoItem?.videoUrl) {
+      const el = this.getVideoElement(videoItem.videoUrl);
+      // Keep playback in step with the timeline: play while the timeline plays,
+      // pause when it stops (so a paused viewer shows a held frame).
+      if (this.playing) {
+        if (el.paused) el.play().catch(() => { /* autoplay can reject; frame still draws */ });
+      } else if (!el.paused) {
+        el.pause();
+      }
+      // HAVE_CURRENT_DATA — a frame is available to paint.
+      if (el.readyState >= 2 && el.videoWidth > 0) {
+        ctx.drawImage(el, 0, 0, video.width, video.height);
+        ctx.restore();
+        return;
+      }
+      // Not ready yet: fall through to the placeholder; getVideoElement has
+      // registered a redraw so the first frame paints as soon as it decodes.
+    }
+
+    // Render placeholder rectangle for video
+    ctx.fillStyle = '#333333';
+    ctx.fillRect(0, 0, video.width, video.height);
+
+    // Draw video icon/indicator
+    ctx.strokeStyle = '#666666';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, video.width, video.height);
+
+    // Draw play button triangle
+    const centerX = video.width / 2;
+    const centerY = video.height / 2;
+    const size = Math.min(video.width, video.height) * 0.2;
+
+    ctx.fillStyle = '#888888';
+    ctx.beginPath();
+    ctx.moveTo(centerX - size / 2, centerY - size);
+    ctx.lineTo(centerX - size / 2, centerY + size);
+    ctx.lineTo(centerX + size, centerY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Draw video name and metadata if space permits
+    if (video.width > 100 && video.height > 60) {
+      ctx.fillStyle = '#AAAAAA';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+
+      // Show video name
+      const displayName = video.libraryItemName.length > 30
+        ? video.libraryItemName.substring(0, 27) + '...'
+        : video.libraryItemName;
+      ctx.fillText(displayName, centerX, 8);
+
+      // Show video info from metadata if available
+      if (this.doc) {
+        const videoItem = this.doc.videos.get(video.libraryItemName);
+        if (videoItem) {
+          const info: string[] = [];
+          if (videoItem.width && videoItem.height) {
+            info.push(`${videoItem.width}×${videoItem.height}`);
+          }
+          if (videoItem.fps) {
+            info.push(`${videoItem.fps}fps`);
+          }
+          if (videoItem.duration) {
+            info.push(`${videoItem.duration.toFixed(1)}s`);
+          }
+          if (info.length > 0) {
+            ctx.fillText(info.join(' • '), centerX, video.height - 20);
+          }
+
+          // Show FLV codec info if available
+          if (videoItem.flvData) {
+            const flvInfo: string[] = [];
+            if (videoItem.flvData.videoCodec) {
+              flvInfo.push(videoItem.flvData.videoCodec);
+            }
+            if (videoItem.flvData.audioCodec) {
+              flvInfo.push(videoItem.flvData.audioCodec);
+            }
+            if (flvInfo.length > 0) {
+              ctx.fillText(flvInfo.join(' + '), centerX, video.height - 36);
+            }
+          }
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
+  private renderBitmapInstance(bitmap: BitmapInstance, depth: number = 0): void {
+    if (!this.doc) return;
+
+    if (DEBUG) {
+      console.log('renderBitmap:', bitmap.libraryItemName);
+    }
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Apply transformation
+    this.applyMatrix(bitmap.matrix);
+
+    // Look up bitmap item from library
+    const bitmapItem = getWithNormalizedPath(this.doc.bitmaps, bitmap.libraryItemName);
+
+    // Create path for hit testing
+    if (this.debugMode) {
+      const path = new Path2D();
+      // Use actual image dimensions if available, otherwise fall back to BitmapItem dimensions
+      const img = bitmapItem?.imageData;
+      const width = img ? (img.naturalWidth || img.width) : (bitmapItem?.width || 100);
+      const height = img ? (img.naturalHeight || img.height) : (bitmapItem?.height || 100);
+      path.rect(0, 0, width, height);
+      this.debugElements.push({
+        type: 'bitmap',
+        element: bitmap,
+        path,
+        transform: ctx.getTransform(),
+        depth,
+        parentPath: [...this.debugSymbolPath]
+      });
+    }
+
+    if (bitmapItem && bitmapItem.imageData) {
+      // If we have loaded image data, draw it at its natural dimensions
+      // The actual image may be smaller than BitmapItem dimensions due to FLA format quirks
+      const img = bitmapItem.imageData;
+      ctx.drawImage(img, 0, 0, img.naturalWidth || img.width, img.naturalHeight || img.height);
+    } else if (bitmapItem) {
+      // Bitmap exists but imageData failed to load (e.g., corrupted data)
+      // Skip drawing placeholder to avoid visual artifacts - just log in debug mode
+      if (DEBUG) {
+        console.log('Skipping bitmap (no imageData):', bitmap.libraryItemName, bitmapItem.width, 'x', bitmapItem.height);
+      }
+      // Don't draw gray placeholder - it creates visual artifacts
+    } else {
+      // No bitmap info at all - skip silently
+      if (DEBUG) {
+        console.log('Skipping missing bitmap:', bitmap.libraryItemName);
+      }
+      // Don't draw placeholder
+    }
+
+    ctx.restore();
+  }
+
+  private renderTextInstance(text: TextInstance, depth: number = 0): void {
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Apply filters if present
+    const hasFilters = text.filters && text.filters.length > 0;
+    if (hasFilters) {
+      this.applyFilters(ctx, text.filters!);
+    }
+
+    // Apply transformation
+    this.applyMatrix(text.matrix);
+
+    // Create path for hit testing (text bounding box)
+    if (this.debugMode) {
+      const path = new Path2D();
+      path.rect(text.left, 0, text.width, text.height);
+      this.debugElements.push({
+        type: 'text',
+        element: text,
+        path,
+        transform: ctx.getTransform(),
+        depth,
+        parentPath: [...this.debugSymbolPath]
+      });
+    }
+
+    // Render text runs. Multiple DOMTextRuns within one text block are inline
+    // styled spans that flow across a paragraph (a black run followed by a
+    // colored run sits on the SAME line), not independent vertical blocks. They
+    // only break to a new line on an actual \r/\n (real files put the line
+    // break at the END of a run's characters) or on width overflow.
+    if (text.textRuns.length <= 1) {
+      // Single-run fast path: common case, output kept byte-for-byte identical.
+      this.renderSingleTextRun(text);
+    } else {
+      // Multi-run inline path: flow styled spans across shared lines.
+      this.renderInlineTextRuns(text);
+    }
+
+    // Clear filters if applied
+    if (hasFilters) {
+      this.clearFilters(ctx);
+    }
+
+    ctx.restore();
+  }
+
+  // Build the canvas font string + derived style values for a single run.
+  // Shared by the single-run and inline multi-run layout paths so per-segment
+  // font/size/bold/italic/color/letterSpacing are applied consistently.
+  private buildRunStyle(run: TextRun): {
+    font: string;
+    fontSize: number;
+    color: string;
+    letterSpacing: number;
+    lineHeight: number;
+    lineSpacing: number;
+  } {
+    const fontStyle = run.italic ? 'italic ' : '';
+    const fontWeight = run.bold ? 'bold ' : '';
+    let fontSize = run.size;
+
+    // Adjust font size for subscript/superscript
+    if (run.characterPosition === 'subscript' || run.characterPosition === 'superscript') {
+      fontSize = fontSize * 0.7; // Smaller for sub/super
+    }
+
+    const fontFace = this.mapFontName(run.face || 'sans-serif');
+    return {
+      font: `${fontStyle}${fontWeight}${fontSize}px ${fontFace}, sans-serif`,
+      fontSize,
+      color: run.fillColor,
+      letterSpacing: run.letterSpacing || 0,
+      lineHeight: run.lineHeight || run.size * 1.2,
+      // Leading: extra space ADDED between lines (XFL lineSpacing). Absent => 0
+      // => no change. Same point/pixel scale as lineHeight/size.
+      lineSpacing: run.lineSpacing || 0,
+    };
+  }
+
+  // Original single-run layout. Kept identical to the pre-rewrite behavior so a
+  // text block with one DOMTextRun (the overwhelmingly common case) renders
+  // byte-for-byte the same.
+  private renderSingleTextRun(text: TextInstance): void {
+    const ctx = this.ctx;
+    const run = text.textRuns[0];
+    if (!run) {
+      return;
+    }
+
+    let yOffset = 0;
+    let isFirstParagraph = true;
+
+    const style = this.buildRunStyle(run);
+    const fontSize = style.fontSize;
+    ctx.font = style.font;
+    ctx.fillStyle = style.color;
+    ctx.textBaseline = 'top';
+
+    // Split by line breaks first
+    const paragraphs = run.characters.split(/\r|\n/);
+    const lineHeight = style.lineHeight;
+    // Per-line vertical advance = line height + leading (XFL lineSpacing).
+    // Leading is ADDED between lines; absent/0 => identical to prior behavior.
+    // Source: Adobe "Extending Flash Professional" TextAttrs.lineSpacing
+    // ("line spacing (leading) of the paragraph", -360..720), and the SWF text
+    // metric leading = total line height - (ascent + descent). JPEXS writes it
+    // as twipToPixel(leading), the same scale as size/lineHeight.
+    const lineAdvance = lineHeight + style.lineSpacing;
+
+    // Letter spacing (default 0, can be negative to compress)
+    const letterSpacing = style.letterSpacing;
+
+    // Margins (in twips, convert to pixels by dividing by 20)
+    const leftMargin = (run.leftMargin || 0) / 20;
+    const rightMargin = (run.rightMargin || 0) / 20;
+    const indent = (run.indent || 0) / 20;
+
+    // Calculate effective width for wrapping
+    const effectiveWidth = text.width - leftMargin - rightMargin;
+
+    for (let paraIndex = 0; paraIndex < paragraphs.length; paraIndex++) {
+      const paragraph = paragraphs[paraIndex];
+      if (paragraph.length === 0) {
+        yOffset += lineAdvance;
+        isFirstParagraph = false;
+        continue;
+      }
+
+      // Word wrap within effective width
+      const wrappedLines = this.wrapText(ctx, paragraph, effectiveWidth - (isFirstParagraph ? indent : 0), letterSpacing);
+
+      for (let lineIndex = 0; lineIndex < wrappedLines.length; lineIndex++) {
+        const line = wrappedLines[lineIndex];
+        // Calculate line width for alignment
+        const lineWidth = this.measureTextWidth(ctx, line, letterSpacing);
+
+        // Calculate x position based on alignment with margins
+        let xPos = text.left + leftMargin;
+
+        // Apply indent only to first line of first paragraph
+        if (lineIndex === 0 && isFirstParagraph && indent > 0) {
+          xPos += indent;
+        }
+
+        if (run.alignment === 'center') {
+          xPos = text.left + leftMargin + (effectiveWidth - lineWidth) / 2;
+        } else if (run.alignment === 'right') {
+          xPos = text.left + leftMargin + effectiveWidth - lineWidth;
+        }
+
+        // Calculate y position with subscript/superscript offset
+        let renderY = yOffset;
+        if (run.characterPosition === 'subscript') {
+          renderY += run.size * 0.3; // Move down for subscript
+        } else if (run.characterPosition === 'superscript') {
+          renderY -= run.size * 0.2; // Move up for superscript
+        }
+
+        // Render with letter spacing, kerning, and rotation
+        this.renderTextWithSpacing(ctx, line, xPos, renderY, letterSpacing, run.autoKern, run.rotation);
+
+        // Render underline if enabled
+        if (run.underline) {
+          ctx.save();
+          ctx.strokeStyle = run.fillColor;
+          ctx.lineWidth = Math.max(1, fontSize / 12);
+          const underlineY = renderY + fontSize + 2;
+          ctx.beginPath();
+          ctx.moveTo(xPos, underlineY);
+          ctx.lineTo(xPos + lineWidth, underlineY);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        yOffset += lineAdvance;
+      }
+
+      isFirstParagraph = false;
+    }
+  }
+
+  // Line-based inline layout for blocks with multiple DOMTextRuns. Runs are
+  // inline styled spans: they flow left-to-right on a shared horizontal cursor,
+  // re-applying each span's own font/color/letterSpacing, and only break to a
+  // new line on a real \r/\n in the characters or on width overflow.
+  private renderInlineTextRuns(text: TextInstance): void {
+    const ctx = this.ctx;
+    ctx.textBaseline = 'top';
+
+    // A drawable word: a run of non-space text tagged with its source run.
+    // Spaces are kept as separate tokens so inter-word breaks survive wrapping.
+    type Token = { text: string; run: TextRun; style: ReturnType<FLARenderer['buildRunStyle']>; isSpace: boolean };
+
+    // Each LINE is a list of styled tokens (wrapping may add more lines).
+    const sourceLines: Token[][] = [[]];
+    // The run whose break started each source line, and the run whose break
+    // ended it: an empty line (a blank paragraph) takes its height from them.
+    const lineStartRuns: TextRun[] = [text.textRuns[0]];
+    const lineEndRuns: (TextRun | undefined)[] = [undefined];
+
+    for (const run of text.textRuns) {
+      const style = this.buildRunStyle(run);
+      // Split run characters on explicit line breaks. A break terminates the
+      // current line; text after it begins a new line. A trailing break (the
+      // common "...\r" run shape) leaves an empty trailing segment which we do
+      // NOT turn into a spurious blank line below.
+      const segments = run.characters.split(/\r|\n/);
+      for (let s = 0; s < segments.length; s++) {
+        if (s > 0) {
+          // An explicit line break: start a fresh line.
+          lineEndRuns[lineEndRuns.length - 1] ??= run;
+          sourceLines.push([]);
+          lineStartRuns.push(run);
+          lineEndRuns.push(undefined);
+        }
+        const segment = segments[s];
+        if (segment.length === 0) {
+          continue;
+        }
+        // Tokenize into words and the spaces between them so word-wrap can
+        // break at spaces while preserving each span's style.
+        const parts = segment.split(/( +)/);
+        for (const part of parts) {
+          if (part.length === 0) continue;
+          sourceLines[sourceLines.length - 1].push({
+            text: part,
+            run,
+            style,
+            isSpace: /^ +$/.test(part),
+          });
+        }
+      }
+    }
+
+    // Drop a trailing empty line produced by a run ending in \r (so a trailing
+    // line break does not create an extra blank line).
+    if (sourceLines.length > 1 && sourceLines[sourceLines.length - 1].length === 0) {
+      sourceLines.pop();
+    }
+    const emptyLineRuns = sourceLines.map((_, i) => lineEndRuns[i] ?? lineStartRuns[i]);
+
+    // Use the first run's block-level metrics (margins/width) for the box, the
+    // same width source the single-run path derives alignment from.
+    const firstRun = text.textRuns[0];
+    const leftMargin = (firstRun.leftMargin || 0) / 20;
+    const rightMargin = (firstRun.rightMargin || 0) / 20;
+    const effectiveWidth = text.width - leftMargin - rightMargin;
+
+    const measureToken = (token: Token): number => {
+      ctx.font = token.style.font;
+      return this.measureTextWidth(ctx, token.text, token.style.letterSpacing);
+    };
+
+    // Wrap each source line into visual lines that fit effectiveWidth. A line
+    // with a defined box width breaks between words on overflow; the leading
+    // space of a wrapped line is dropped. Lines never break mid-word.
+    const visualLines: Token[][] = [];
+    const visualLineRuns: TextRun[] = []; // sizes a visual line with no text
+    const canWrap = effectiveWidth > 0 && isFinite(effectiveWidth);
+    for (const [lineIndex, lineTokens] of sourceLines.entries()) {
+      const lineRun = emptyLineRuns[lineIndex];
+      if (!canWrap) {
+        visualLines.push(lineTokens);
+        visualLineRuns.push(lineRun);
+        continue;
+      }
+      let current: Token[] = [];
+      let currentWidth = 0;
+      for (const token of lineTokens) {
+        const tokenWidth = measureToken(token);
+        if (token.isSpace) {
+          if (current.length === 0) {
+            continue; // skip leading space on a (wrapped) line
+          }
+          current.push(token);
+          currentWidth += tokenWidth;
+          continue;
+        }
+        if (current.length > 0 && currentWidth + tokenWidth > effectiveWidth) {
+          // Overflow: trim a trailing space off the finished line, then break.
+          while (current.length > 0 && current[current.length - 1].isSpace) {
+            const removed = current.pop()!;
+            currentWidth -= measureToken(removed);
+          }
+          visualLines.push(current);
+          visualLineRuns.push(lineRun);
+          current = [token];
+          currentWidth = tokenWidth;
+        } else {
+          current.push(token);
+          currentWidth += tokenWidth;
+        }
+      }
+      // Always push the line, even when empty, so blank source lines preserved.
+      visualLines.push(current);
+      visualLineRuns.push(lineRun);
+    }
+
+    const alignment = firstRun.alignment;
+    let yOffset = 0;
+
+    for (const [lineIndex, lineTokens] of visualLines.entries()) {
+      // Drop a trailing space so it does not affect alignment width.
+      const trimmed = [...lineTokens];
+      while (trimmed.length > 0 && trimmed[trimmed.length - 1].isSpace) {
+        trimmed.pop();
+      }
+
+      // Line advances by the tallest line-height among its spans (an empty
+      // line by its own break's run, e.g. a blank paragraph's format). The
+      // leading (XFL lineSpacing) of that same dominant span is ADDED on top,
+      // matching the single-run path (advance = lineHeight + lineSpacing).
+      // Leading pairs with the span that sets the line height so the tallest
+      // run drives both. Absent/0 lineSpacing => identical to prior behavior.
+      const emptyRun = visualLineRuns[lineIndex];
+      let lineHeight = trimmed.length > 0 ? 0 : emptyRun.lineHeight || emptyRun.size * 1.2;
+      let lineSpacing = trimmed.length > 0 ? 0 : emptyRun.lineSpacing || 0;
+      for (const token of trimmed) {
+        if (token.style.lineHeight > lineHeight) {
+          lineHeight = token.style.lineHeight;
+          lineSpacing = token.style.lineSpacing;
+        }
+      }
+      const lineAdvance = lineHeight + lineSpacing;
+
+      // Measure the line's TOTAL width across all spans, each with its own font.
+      let lineWidth = 0;
+      for (const token of trimmed) {
+        lineWidth += measureToken(token);
+      }
+
+      // Start x from alignment relative to the text box (same origin the
+      // single-run path uses).
+      let xPos = text.left + leftMargin;
+      if (alignment === 'center') {
+        xPos = text.left + leftMargin + (effectiveWidth - lineWidth) / 2;
+      } else if (alignment === 'right') {
+        xPos = text.left + leftMargin + effectiveWidth - lineWidth;
+      }
+
+      // Draw each span left-to-right at the running cursor, re-applying its own
+      // font/color/letterSpacing.
+      for (const token of trimmed) {
+        const run = token.run;
+        ctx.font = token.style.font;
+        ctx.fillStyle = token.style.color;
+
+        let renderY = yOffset;
+        if (run.characterPosition === 'subscript') {
+          renderY += run.size * 0.3;
+        } else if (run.characterPosition === 'superscript') {
+          renderY -= run.size * 0.2;
+        }
+
+        const tokenWidth = measureToken(token);
+        ctx.font = token.style.font; // measureToken changed ctx.font
+        this.renderTextWithSpacing(
+          ctx,
+          token.text,
+          xPos,
+          renderY,
+          token.style.letterSpacing,
+          run.autoKern,
+          run.rotation
+        );
+
+        if (run.underline) {
+          ctx.save();
+          ctx.strokeStyle = token.style.color;
+          ctx.lineWidth = Math.max(1, token.style.fontSize / 12);
+          const underlineY = renderY + token.style.fontSize + 2;
+          ctx.beginPath();
+          ctx.moveTo(xPos, underlineY);
+          ctx.lineTo(xPos + tokenWidth, underlineY);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        xPos += tokenWidth;
+      }
+
+      yOffset += lineAdvance;
+    }
+  }
+
+  // Word wrap text to fit within maxWidth
+  private wrapText(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    maxWidth: number,
+    letterSpacing: number
+  ): string[] {
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (const word of words) {
+      const testLine = currentLine ? currentLine + ' ' + word : word;
+      const testWidth = this.measureTextWidth(ctx, testLine, letterSpacing);
+
+      if (testWidth > maxWidth && currentLine) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = testLine;
+      }
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+
+    return lines.length > 0 ? lines : [''];
+  }
+
+  // Measure text width including letter spacing
+  private measureTextWidth(ctx: CanvasRenderingContext2D, text: string, letterSpacing: number): number {
+    if (letterSpacing === 0) {
+      return ctx.measureText(text).width;
+    }
+    // For custom letter spacing, measure each character
+    let width = 0;
+    for (let i = 0; i < text.length; i++) {
+      width += ctx.measureText(text[i]).width;
+      if (i < text.length - 1) {
+        width += letterSpacing;
+      }
+    }
+    return width;
+  }
+
+  // Render text character by character with letter spacing, kerning, and rotation
+  private renderTextWithSpacing(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    letterSpacing: number,
+    autoKern?: boolean,
+    rotation?: number
+  ): void {
+    // If no special effects, use fast path
+    if (letterSpacing === 0 && !autoKern && !rotation) {
+      ctx.fillText(text, x, y);
+      return;
+    }
+
+    // Render each character with spacing, kerning, and rotation
+    let currentX = x;
+
+    // Common kerning pairs (approximated values)
+    // These are rough approximations since we can't access actual font kerning tables
+    const kerningPairs: Record<string, number> = {
+      'AV': -0.08, 'AW': -0.06, 'AY': -0.08, 'AT': -0.08,
+      'AO': -0.03, 'AC': -0.03, 'AG': -0.03, 'AQ': -0.03,
+      'FA': -0.06, 'FO': -0.03, 'LT': -0.08, 'LV': -0.08,
+      'LW': -0.06, 'LY': -0.08, 'PA': -0.06, 'TA': -0.08,
+      'TO': -0.06, 'TR': -0.04, 'Tr': -0.06, 'Tu': -0.04,
+      'Tw': -0.04, 'Ty': -0.04, 'VA': -0.08, 'Ve': -0.03,
+      'Vo': -0.03, 'WA': -0.06, 'We': -0.03, 'Wo': -0.03,
+      'YA': -0.08, 'Ye': -0.04, 'Yo': -0.04, 'av': -0.03,
+      'aw': -0.02, 'ay': -0.03, 'fa': -0.02, 'fe': -0.02,
+      'fo': -0.02, 'ov': -0.02, 'ow': -0.02, 'oy': -0.02,
+      'va': -0.03, 've': -0.02, 'vo': -0.02, 'wa': -0.02,
+      'we': -0.02, 'wo': -0.02, 'ya': -0.02, 'ye': -0.02, 'yo': -0.02
+    };
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const charWidth = ctx.measureText(char).width;
+
+      if (rotation) {
+        // Apply per-character rotation
+        ctx.save();
+        const charCenterX = currentX + charWidth / 2;
+        ctx.translate(charCenterX, y);
+        ctx.rotate(rotation * Math.PI / 180);
+        ctx.fillText(char, -charWidth / 2, 0);
+        ctx.restore();
+      } else {
+        ctx.fillText(char, currentX, y);
+      }
+
+      // Calculate next position
+      let advance = charWidth + letterSpacing;
+
+      // Apply kerning adjustment if enabled
+      if (autoKern && i < text.length - 1) {
+        const pair = char + text[i + 1];
+        const kernValue = kerningPairs[pair];
+        if (kernValue !== undefined) {
+          // Kerning value is a fraction of the font size
+          const fontSize = parseFloat(ctx.font);
+          advance += kernValue * fontSize;
+        }
+      }
+
+      currentX += advance;
+    }
+  }
+
+  // Track loaded fonts to avoid duplicate loading
+  private loadedFonts = new Set<string>();
+  private loadingFonts = new Map<string, Promise<void>>();
+
+  // Google Fonts that can be loaded dynamically
+  private googleFonts: Record<string, string> = {
+    'Press Start 2P': 'Press+Start+2P',
+  };
+
+  // Map FLA font names to web-compatible font names
+  private mapFontName(flaFontName: string): string {
+    // Common font name mappings from FLA to web fonts
+    const fontMap: Record<string, string> = {
+      'PressStart2P-Regular': 'Press Start 2P',
+      'PressStart2P': 'Press Start 2P',
+      'Arial': 'Arial',
+      'Arial-BoldMT': 'Arial',
+      'ArialMT': 'Arial',
+      'Times New Roman': 'Times New Roman',
+      'TimesNewRomanPSMT': 'Times New Roman',
+      'Courier New': 'Courier New',
+      'CourierNewPSMT': 'Courier New',
+      'Verdana': 'Verdana',
+      'Georgia': 'Georgia',
+      'Impact': 'Impact',
+      'Comic Sans MS': 'Comic Sans MS',
+    };
+
+    // Check for exact match
+    if (fontMap[flaFontName]) {
+      const webFontName = fontMap[flaFontName];
+      this.ensureFontLoaded(webFontName);
+      return `"${webFontName}"`;
+    }
+
+    // Try to find partial match (font family without style suffix)
+    for (const [key, value] of Object.entries(fontMap)) {
+      if (flaFontName.startsWith(key) || key.startsWith(flaFontName)) {
+        this.ensureFontLoaded(value);
+        return `"${value}"`;
+      }
+    }
+
+    // Return quoted font name as-is
+    return `"${flaFontName}"`;
+  }
+
+  // Dynamically load a font if it's a Google Font
+  private ensureFontLoaded(fontName: string): void {
+    // Skip if already loaded or loading
+    if (this.loadedFonts.has(fontName) || this.loadingFonts.has(fontName)) {
+      return;
+    }
+
+    // Check if it's a Google Font we can load
+    const googleFontId = this.googleFonts[fontName];
+    if (!googleFontId) {
+      return; // Not a known Google Font, skip
+    }
+
+    // Start loading the font
+    const loadPromise = this.loadGoogleFont(fontName, googleFontId);
+    this.loadingFonts.set(fontName, loadPromise);
+
+    loadPromise.then(() => {
+      this.loadedFonts.add(fontName);
+      this.loadingFonts.delete(fontName);
+      if (DEBUG) {
+        console.log(`Font loaded: ${fontName}`);
+      }
+    }).catch((err) => {
+      console.warn(`Failed to load font ${fontName}:`, err);
+      this.loadingFonts.delete(fontName);
+    });
+  }
+
+  // Load a Google Font dynamically
+  private async loadGoogleFont(fontName: string, googleFontId: string): Promise<void> {
+    // AnShelf: local fonts only; no remote fetches.
+    return;
+
+    // Create and inject stylesheet link
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = url;
+    document.head.appendChild(link);
+
+    // Wait for font to be ready
+    return document.fonts.ready.then(() => {
+      // Check if the font is actually available
+      return document.fonts.load(`16px "${fontName}"`).then(() => {});
+    });
+  }
+
+  private renderShape(shape: Shape, depth: number = 0): void {
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Apply shape's transformation matrix
+    this.applyMatrix(shape.matrix);
+
+    // Build fill style lookup
+    const fillStyles = new Map<number, FillStyle>();
+    for (const fill of shape.fills) {
+      fillStyles.set(fill.index, fill);
+    }
+
+    // Build stroke style lookup
+    const strokeStyles = new Map<number, StrokeStyle>();
+    for (const stroke of shape.strokes) {
+      strokeStyles.set(stroke.index, stroke);
+    }
+
+    // Get cached paths or compute them
+    const cached = this.getOrComputeShapePaths(shape);
+    const { fillPaths, strokePaths, strokeOutlines, combinedPath } = cached;
+
+    // Capture debug element before rendering
+    if (this.debugMode) {
+      this.debugElements.push({
+        type: 'shape',
+        element: shape,
+        path: combinedPath,
+        transform: ctx.getTransform(),
+        depth,
+        parentPath: [...this.debugSymbolPath],
+        fillStyles,
+        strokeStyles,
+        edges: shape.edges
+      });
+    }
+
+    // Render filled paths - sort by style index for consistent ordering
+    const sortedFillStyles = Array.from(fillPaths.entries()).sort((a, b) => a[0] - b[0]);
+
+    for (const [styleIndex, path] of sortedFillStyles) {
+      const fill = fillStyles.get(styleIndex);
+      if (fill) {
+        ctx.fillStyle = this.getFillStyle(fill);
+        // Use nonzero fill rule - evenodd can create holes with overlapping subpaths
+        ctx.fill(path, 'nonzero');
+      }
+    }
+
+    // Render stroked paths, and variable-width strokes as filled outlines, in style order
+    const sortedStrokeStyles = [...strokePaths.entries(), ...strokeOutlines.entries()].sort((a, b) => a[0] - b[0]);
+
+    for (const [styleIndex, path] of sortedStrokeStyles) {
+      const stroke = strokeStyles.get(styleIndex);
+      if (stroke && strokeOutlines.has(styleIndex)) {
+        ctx.fillStyle = this.getStrokeStyle(stroke);
+        ctx.fill(path, 'nonzero');
+      } else if (stroke) {
+        ctx.strokeStyle = this.getStrokeStyle(stroke);
+        ctx.lineWidth = stroke.weight;
+        ctx.lineCap = stroke.caps === 'none' ? 'butt' : stroke.caps || 'round';
+        ctx.lineJoin = stroke.joints || 'round';
+        // Apply miter limit (Flash default is 3)
+        ctx.miterLimit = stroke.miterLimit ?? 3;
+        // Dashed strokes carry a [dash, gap] pattern (user-space units, 1:1 with lineWidth).
+        // Always set the dash explicitly (empty array = solid) so a dashed stroke never leaks
+        // its pattern onto a later solid stroke in the same shape.
+        ctx.setLineDash(stroke.dash ?? []);
+        ctx.stroke(path);
+      }
+    }
+
+    // Reset dash so it cannot leak past this shape (defensive; ctx.restore() also clears it).
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // Compute and cache shape paths (expensive operation done once per shape)
+  private getOrComputeShapePaths(shape: Shape): CachedShapePaths {
+    // Check cache first
+    const cached = this.shapePathCache.get(shape);
+    if (cached) {
+      return cached;
+    }
+
+    // Compute paths (this is the expensive part)
+    const combinedPath = new Path2D();
+    const fillEdgeContributions = new Map<number, { commands: PathCommand[], startX: number, startY: number, endX: number, endY: number }[]>();
+
+    for (const edge of shape.edges) {
+      // Add to combined path for hit testing
+      const path = this.edgeToPath(edge);
+      combinedPath.addPath(path);
+
+      // Split edge commands into segments (at internal MoveTo commands that create gaps)
+      const segments: PathCommand[][] = [];
+      let currentSegment: PathCommand[] = [];
+      let lastEndX = NaN;
+      let lastEndY = NaN;
+      const SPLIT_EPSILON = 0.5;
+
+      for (const cmd of edge.commands) {
+        if (cmd.type === 'M') {
+          const isContinuous = !Number.isNaN(lastEndX) &&
+            Math.abs(cmd.x - lastEndX) <= SPLIT_EPSILON &&
+            Math.abs(cmd.y - lastEndY) <= SPLIT_EPSILON;
+
+          if (isContinuous) {
+            currentSegment.push(cmd);
+          } else {
+            if (currentSegment.length > 0) {
+              const hasDrawing = currentSegment.some(c => c.type !== 'M');
+              if (hasDrawing) {
+                segments.push(currentSegment);
+              }
+            }
+            currentSegment = [cmd];
+          }
+          lastEndX = cmd.x;
+          lastEndY = cmd.y;
+        } else {
+          currentSegment.push(cmd);
+          if ('x' in cmd && Number.isFinite(cmd.x)) {
+            lastEndX = cmd.x;
+            lastEndY = cmd.y;
+          }
+        }
+      }
+      if (currentSegment.length > 0) {
+        const hasDrawing = currentSegment.some(c => c.type !== 'M');
+        if (hasDrawing) {
+          segments.push(currentSegment);
+        }
+      }
+
+      // Process each segment as a separate contribution
+      for (const segmentCmds of segments) {
+        const startPoint = this.getFirstPoint(segmentCmds);
+        const endPoint = this.getLastPoint(segmentCmds);
+        if (!startPoint || !endPoint) continue;
+
+        // Skip edges where fillStyle0 === fillStyle1 - these are internal lines
+        // within a filled region, not boundary edges
+        const isInternalEdge = edge.fillStyle0 !== undefined &&
+                               edge.fillStyle1 !== undefined &&
+                               edge.fillStyle0 === edge.fillStyle1;
+
+        if (edge.fillStyle1 !== undefined && !isInternalEdge) {
+          if (!fillEdgeContributions.has(edge.fillStyle1)) {
+            fillEdgeContributions.set(edge.fillStyle1, []);
+          }
+          fillEdgeContributions.get(edge.fillStyle1)!.push({
+            commands: segmentCmds,
+            startX: startPoint.x,
+            startY: startPoint.y,
+            endX: endPoint.x,
+            endY: endPoint.y
+          });
+        }
+
+        if (edge.fillStyle0 !== undefined && edge.fillStyle0 !== edge.fillStyle1) {
+          if (!fillEdgeContributions.has(edge.fillStyle0)) {
+            fillEdgeContributions.set(edge.fillStyle0, []);
+          }
+          const reversedCmds = this.reverseCommands(segmentCmds);
+          fillEdgeContributions.get(edge.fillStyle0)!.push({
+            commands: reversedCmds,
+            startX: endPoint.x,
+            startY: endPoint.y,
+            endX: startPoint.x,
+            endY: startPoint.y
+          });
+        }
+      }
+    }
+
+    // Build fill paths by sorting edges into connected chains
+    const fillPaths = new Map<number, Path2D>();
+    const fillAreas = new Map<number, number>();
+    // Binary-FLA edges have exact integer endpoints: match vertices exactly
+    // (see Shape.exactEdges). XFL keeps the 8px gap tolerance.
+    const EPSILON = shape.exactEdges ? 1e-6 : 8.0;
+
+    for (const [styleIndex, contributions] of fillEdgeContributions) {
+      const path = new Path2D();
+      const sortedContributions = this.sortEdgeContributions(contributions, EPSILON);
+
+      let currentX = NaN;
+      let currentY = NaN;
+      let subpathStartX = NaN;
+      let subpathStartY = NaN;
+
+      // Signed area of the path (shoelace over its control polygon): its sign
+      // is the fill's winding direction, which mask clips need to union
+      // regions correctly (see buildMaskClipPath).
+      let area = 0;
+      let lastX = NaN;
+      let lastY = NaN;
+      const visit = (x: number, y: number) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        if (!Number.isNaN(lastX)) area += lastX * y - x * lastY;
+        lastX = x;
+        lastY = y;
+      };
+
+      for (let i = 0; i < sortedContributions.length; i++) {
+        const contrib = sortedContributions[i];
+        const isNewSubpath = Number.isNaN(currentX) ||
+            Math.abs(contrib.startX - currentX) > EPSILON ||
+            Math.abs(contrib.startY - currentY) > EPSILON;
+
+        if (isNewSubpath && !Number.isNaN(subpathStartX)) {
+          const atStart = Math.abs(currentX - subpathStartX) <= EPSILON &&
+                          Math.abs(currentY - subpathStartY) <= EPSILON;
+          if (!atStart) {
+            path.lineTo(subpathStartX, subpathStartY);
+          }
+          path.closePath();
+          visit(subpathStartX, subpathStartY);
+        }
+
+        if (isNewSubpath) {
+          path.moveTo(contrib.startX, contrib.startY);
+          subpathStartX = contrib.startX;
+          subpathStartY = contrib.startY;
+          lastX = NaN;
+          visit(contrib.startX, contrib.startY);
+        }
+
+        for (const cmd of contrib.commands) {
+          if (cmd.type === 'M') continue;
+          this.addCommandToPath(path, cmd);
+          if (cmd.type === 'Q' && Number.isFinite(cmd.cx) && Number.isFinite(cmd.cy)) {
+            visit(cmd.cx, cmd.cy);
+            visit(cmd.x, cmd.y);
+          } else if (cmd.type === 'C' && Number.isFinite(cmd.c1x) && Number.isFinite(cmd.c2x)) {
+            visit(cmd.c1x, cmd.c1y);
+            visit(cmd.c2x, cmd.c2y);
+            visit(cmd.x, cmd.y);
+          } else if (cmd.type === 'L') {
+            visit(cmd.x, cmd.y);
+          }
+        }
+
+        currentX = contrib.endX;
+        currentY = contrib.endY;
+      }
+
+      if (!Number.isNaN(subpathStartX)) {
+        const atStart = Math.abs(currentX - subpathStartX) <= EPSILON &&
+                        Math.abs(currentY - subpathStartY) <= EPSILON;
+        if (!atStart) {
+          path.lineTo(subpathStartX, subpathStartY);
+        }
+        path.closePath();
+        visit(subpathStartX, subpathStartY);
+      }
+
+      fillPaths.set(styleIndex, path);
+      fillAreas.set(styleIndex, area / 2);
+    }
+
+    // Handle strokes separately (they don't need sorting). A variable-width stroke
+    // (<VariablePointWidth>) becomes a filled outline instead of a stroked path.
+    const strokePaths = new Map<number, Path2D>();
+    const strokeOutlines = new Map<number, Path2D>();
+    const variableStrokes = new Map<number, StrokeStyle>();
+    for (const stroke of shape.strokes) {
+      if (stroke.widthMarkers) variableStrokes.set(stroke.index, stroke);
+    }
+    for (const edge of shape.edges) {
+      if (edge.strokeStyle === undefined) continue;
+      const variableStroke = variableStrokes.get(edge.strokeStyle);
+      if (variableStroke) {
+        let outline = strokeOutlines.get(edge.strokeStyle);
+        if (!outline) {
+          outline = new Path2D();
+          strokeOutlines.set(edge.strokeStyle, outline);
+        }
+        for (const poly of variableWidthStrokePolygons(edge.commands, variableStroke)) {
+          outline.moveTo(poly[0], poly[1]);
+          for (let i = 2; i < poly.length; i += 2) outline.lineTo(poly[i], poly[i + 1]);
+          outline.closePath();
+        }
+        continue;
+      }
+      if (!strokePaths.has(edge.strokeStyle)) {
+        strokePaths.set(edge.strokeStyle, new Path2D());
+      }
+      strokePaths.get(edge.strokeStyle)!.addPath(this.edgeToPath(edge));
+    }
+
+    // Cache the result
+    const result: CachedShapePaths = { fillPaths, fillAreas, strokePaths, strokeOutlines, combinedPath };
+    this.shapePathCache.set(shape, result);
+    return result;
+  }
+
+  private edgeToPath(edge: Edge): Path2D {
+    const path = new Path2D();
+    let currentX = NaN;
+    let currentY = NaN;
+    const EPSILON = 0.5; // Tolerance for considering points as same
+
+    for (const cmd of edge.commands) {
+      // Skip commands with invalid coordinates
+      if ('x' in cmd && (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.y))) {
+        continue;
+      }
+
+      switch (cmd.type) {
+        case 'M':
+          // Skip redundant moveTo to same position
+          if (Number.isNaN(currentX) || Math.abs(cmd.x - currentX) > EPSILON || Math.abs(cmd.y - currentY) > EPSILON) {
+            path.moveTo(cmd.x, cmd.y);
+          }
+          currentX = cmd.x;
+          currentY = cmd.y;
+          break;
+        case 'L':
+          // Only draw line if it's not to the same point
+          if (Math.abs(cmd.x - currentX) > EPSILON || Math.abs(cmd.y - currentY) > EPSILON) {
+            path.lineTo(cmd.x, cmd.y);
+          }
+          currentX = cmd.x;
+          currentY = cmd.y;
+          break;
+        case 'Q':
+          if (!Number.isFinite(cmd.cx) || !Number.isFinite(cmd.cy)) continue;
+          path.quadraticCurveTo(cmd.cx, cmd.cy, cmd.x, cmd.y);
+          currentX = cmd.x;
+          currentY = cmd.y;
+          break;
+        case 'C':
+          if (!Number.isFinite(cmd.c1x) || !Number.isFinite(cmd.c1y) ||
+              !Number.isFinite(cmd.c2x) || !Number.isFinite(cmd.c2y)) continue;
+          path.bezierCurveTo(cmd.c1x, cmd.c1y, cmd.c2x, cmd.c2y, cmd.x, cmd.y);
+          currentX = cmd.x;
+          currentY = cmd.y;
+          break;
+        case 'Z':
+          path.closePath();
+          break;
+      }
+    }
+
+    return path;
+  }
+
+  // Get the last point from a command list
+  private getLastPoint(commands: PathCommand[]): { x: number; y: number } | null {
+    for (let i = commands.length - 1; i >= 0; i--) {
+      const cmd = commands[i];
+      if ('x' in cmd && Number.isFinite(cmd.x) && Number.isFinite(cmd.y)) {
+        return { x: cmd.x, y: cmd.y };
+      }
+    }
+    return null;
+  }
+
+  // Reverse commands for fillStyle0 (right-side fill — see AGENTS.md / Ruffle:
+  // fillStyle1 = LEFT/forward, fillStyle0 = RIGHT/reversed)
+  private reverseCommands(commands: PathCommand[]): PathCommand[] {
+    const points: { x: number; y: number; type: string; cx?: number; cy?: number; c1x?: number; c1y?: number; c2x?: number; c2y?: number }[] = [];
+
+    for (const cmd of commands) {
+      if (cmd.type === 'M' || cmd.type === 'L') {
+        points.push({ x: cmd.x, y: cmd.y, type: cmd.type });
+      } else if (cmd.type === 'Q') {
+        points.push({ x: cmd.x, y: cmd.y, type: 'Q', cx: cmd.cx, cy: cmd.cy });
+      } else if (cmd.type === 'C') {
+        points.push({ x: cmd.x, y: cmd.y, type: 'C', c1x: cmd.c1x, c1y: cmd.c1y, c2x: cmd.c2x, c2y: cmd.c2y });
+      }
+    }
+
+    if (points.length === 0) return [];
+
+    const result: PathCommand[] = [];
+    const lastPoint = points[points.length - 1];
+    result.push({ type: 'M', x: lastPoint.x, y: lastPoint.y });
+
+    for (let i = points.length - 1; i > 0; i--) {
+      const current = points[i];
+      const prev = points[i - 1];
+
+      if (current.type === 'L' || current.type === 'M') {
+        result.push({ type: 'L', x: prev.x, y: prev.y });
+      } else if (current.type === 'Q' && current.cx !== undefined && current.cy !== undefined) {
+        result.push({ type: 'Q', cx: current.cx, cy: current.cy, x: prev.x, y: prev.y });
+      } else if (current.type === 'C' && current.c1x !== undefined) {
+        result.push({ type: 'C', c1x: current.c2x!, c1y: current.c2y!, c2x: current.c1x, c2y: current.c1y!, x: prev.x, y: prev.y });
+      }
+    }
+
+    return result;
+  }
+
+  // Get the first point from a command list
+  private getFirstPoint(commands: PathCommand[]): { x: number; y: number } | null {
+    for (const cmd of commands) {
+      if ('x' in cmd && Number.isFinite(cmd.x) && Number.isFinite(cmd.y)) {
+        return { x: cmd.x, y: cmd.y };
+      }
+    }
+    return null;
+  }
+
+  // Sort edge contributions to form connected chains
+  // This resolves the "edge soup" problem in Flash shapes
+  private sortEdgeContributions(
+    contributions: { commands: PathCommand[], startX: number, startY: number, endX: number, endY: number }[],
+    epsilon: number
+  ): { commands: PathCommand[], startX: number, startY: number, endX: number, endY: number }[] {
+    if (contributions.length <= 1) return contributions;
+
+    const result: typeof contributions = [];
+    const used = new Set<number>();
+
+    // Track chain starts for better loop closing
+    let chainStartX = contributions[0].startX;
+    let chainStartY = contributions[0].startY;
+
+    // Start with the first contribution
+    let current = contributions[0];
+    result.push(current);
+    used.add(0);
+
+    // Extended epsilon for closing chains (allow larger gaps to close loops)
+    const closeEpsilon = epsilon * 3;
+
+    // Greedily find connected contributions
+    while (used.size < contributions.length) {
+      let bestIdx = -1;
+      let bestDist = Infinity;
+
+      // Look for the BEST (closest) contribution that starts where the current one ends
+      for (let i = 0; i < contributions.length; i++) {
+        if (used.has(i)) continue;
+
+        const candidate = contributions[i];
+        const dx = Math.abs(candidate.startX - current.endX);
+        const dy = Math.abs(candidate.startY - current.endY);
+        const dist = dx + dy; // Manhattan distance
+
+        if (dx <= epsilon && dy <= epsilon && dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx >= 0) {
+        // Found a connection
+        current = contributions[bestIdx];
+        result.push(current);
+        used.add(bestIdx);
+      } else {
+        // No direct continuation found - try to find a contribution that could help close the loop
+        // Look for contribution that starts near current end AND ends near chain start
+        let closingIdx = -1;
+        let closingDist = Infinity;
+
+        for (let i = 0; i < contributions.length; i++) {
+          if (used.has(i)) continue;
+
+          const candidate = contributions[i];
+          const startDx = Math.abs(candidate.startX - current.endX);
+          const startDy = Math.abs(candidate.startY - current.endY);
+          const endDx = Math.abs(candidate.endX - chainStartX);
+          const endDy = Math.abs(candidate.endY - chainStartY);
+
+          // Check if this contribution could close the loop with extended epsilon
+          if (startDx <= closeEpsilon && startDy <= closeEpsilon &&
+              endDx <= closeEpsilon && endDy <= closeEpsilon) {
+            const dist = startDx + startDy + endDx + endDy;
+            if (dist < closingDist) {
+              closingDist = dist;
+              closingIdx = i;
+            }
+          }
+        }
+
+        if (closingIdx >= 0) {
+          // Found a closing contribution
+          current = contributions[closingIdx];
+          result.push(current);
+          used.add(closingIdx);
+        } else {
+          // Start a new chain
+          let newChainIdx = -1;
+          for (let i = 0; i < contributions.length; i++) {
+            if (!used.has(i)) {
+              newChainIdx = i;
+              break;
+            }
+          }
+
+          if (newChainIdx >= 0) {
+            current = contributions[newChainIdx];
+            result.push(current);
+            used.add(newChainIdx);
+            // Update chain start for the new chain
+            chainStartX = current.startX;
+            chainStartY = current.startY;
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  // Add a single command to a path
+  private addCommandToPath(path: Path2D, cmd: PathCommand): void {
+    switch (cmd.type) {
+      case 'M':
+        path.moveTo(cmd.x, cmd.y);
+        break;
+      case 'L':
+        path.lineTo(cmd.x, cmd.y);
+        break;
+      case 'Q':
+        if (Number.isFinite(cmd.cx) && Number.isFinite(cmd.cy)) {
+          path.quadraticCurveTo(cmd.cx, cmd.cy, cmd.x, cmd.y);
+        }
+        break;
+      case 'C':
+        if (Number.isFinite(cmd.c1x) && Number.isFinite(cmd.c1y) &&
+            Number.isFinite(cmd.c2x) && Number.isFinite(cmd.c2y)) {
+          path.bezierCurveTo(cmd.c1x, cmd.c1y, cmd.c2x, cmd.c2y, cmd.x, cmd.y);
+        }
+        break;
+      case 'Z':
+        path.closePath();
+        break;
+    }
+  }
+
+  private getFillStyle(fill: FillStyle): string | CanvasGradient | CanvasPattern {
+    if (fill.type === 'solid' && fill.color) {
+      if (fill.alpha !== undefined && fill.alpha < 1) {
+        return this.colorWithAlpha(fill.color, fill.alpha);
+      }
+      return fill.color;
+    }
+
+    // Handle gradient fills
+    if (fill.type === 'linear' && fill.gradient && fill.gradient.length > 0) {
+      return this.createLinearGradient(fill);
+    }
+
+    if (fill.type === 'radial' && fill.gradient && fill.gradient.length > 0) {
+      return this.createRadialGradient(fill);
+    }
+
+    // Handle bitmap fills
+    if (fill.type === 'bitmap' && fill.bitmapPath) {
+      return this.createBitmapPattern(fill);
+    }
+
+    return '#000000';
+  }
+
+  private getStrokeStyle(stroke: StrokeStyle): string | CanvasGradient | CanvasPattern {
+    // Handle solid strokes
+    if (stroke.type === 'solid' || !stroke.type) {
+      return stroke.color || '#000000';
+    }
+
+    // Handle linear gradient strokes
+    if (stroke.type === 'linear' && stroke.gradient && stroke.gradient.length > 0) {
+      return this.createLinearGradient({
+        type: 'linear',
+        index: stroke.index,
+        gradient: stroke.gradient,
+        matrix: stroke.matrix,
+        spreadMethod: stroke.spreadMethod,
+        interpolationMethod: stroke.interpolationMethod
+      });
+    }
+
+    // Handle radial gradient strokes
+    if (stroke.type === 'radial' && stroke.gradient && stroke.gradient.length > 0) {
+      return this.createRadialGradient({
+        type: 'radial',
+        index: stroke.index,
+        gradient: stroke.gradient,
+        matrix: stroke.matrix,
+        spreadMethod: stroke.spreadMethod,
+        interpolationMethod: stroke.interpolationMethod,
+        focalPointRatio: stroke.focalPointRatio
+      });
+    }
+
+    // Handle bitmap strokes
+    if (stroke.type === 'bitmap' && stroke.bitmapPath) {
+      return this.createBitmapPattern({
+        type: 'bitmap',
+        index: stroke.index,
+        bitmapPath: stroke.bitmapPath,
+        matrix: stroke.matrix,
+        bitmapIsClipped: stroke.bitmapIsClipped,
+        bitmapIsSmoothed: stroke.bitmapIsSmoothed
+      });
+    }
+
+    return stroke.color || '#000000';
+  }
+
+  private createBitmapPattern(fill: FillStyle): CanvasPattern | string {
+    if (!this.doc || !fill.bitmapPath) {
+      return '#808080'; // Gray fallback for missing bitmap
+    }
+
+    // Look up bitmap by path in the document's bitmaps
+    const bitmapItem = this.doc.bitmaps.get(fill.bitmapPath);
+    if (!bitmapItem || !bitmapItem.imageData) {
+      // Try case-insensitive lookup
+      for (const [key, item] of this.doc.bitmaps) {
+        if (key.toLowerCase() === fill.bitmapPath.toLowerCase() && item.imageData) {
+          return this.createPatternFromBitmap(
+            item.imageData,
+            fill.matrix,
+            fill.bitmapIsClipped,
+            fill.bitmapIsSmoothed
+          );
+        }
+      }
+      return '#808080'; // Gray fallback for missing bitmap
+    }
+
+    return this.createPatternFromBitmap(
+      bitmapItem.imageData,
+      fill.matrix,
+      fill.bitmapIsClipped,
+      fill.bitmapIsSmoothed
+    );
+  }
+
+  private createPatternFromBitmap(
+    image: HTMLImageElement,
+    matrix?: Matrix,
+    isClipped?: boolean,
+    isSmoothed?: boolean
+  ): CanvasPattern | string {
+    // Determine repetition mode
+    // 'repeat' for normal tiled fills, 'no-repeat' for clipped fills
+    const repetition = isClipped ? 'no-repeat' : 'repeat';
+
+    // Handle image smoothing (non-smoothed = pixel-perfect)
+    // Note: imageSmoothingEnabled is set at the context level, so we save/restore
+    const savedSmoothing = this.ctx.imageSmoothingEnabled;
+    if (isSmoothed === false) {
+      this.ctx.imageSmoothingEnabled = false;
+    }
+
+    const pattern = this.ctx.createPattern(image, repetition);
+
+    // Restore smoothing setting
+    this.ctx.imageSmoothingEnabled = savedSmoothing;
+
+    if (!pattern) {
+      return '#808080';
+    }
+
+    // Apply the bitmap matrix transform
+    if (matrix) {
+      // Flash bitmap fills use a matrix to position and scale the bitmap.
+      // The matrix transforms from bitmap (image-pixel) space to shape-local space.
+      //
+      // XFL stores this matrix in TWIP space: a typical 1:1 fill is a=20,d=20
+      // (1 image-pixel == 20 twips), with tx/ty also in twips. But this renderer
+      // draws edge geometry in PIXEL space because edge-decoder.ts converts
+      // twips->pixels at parse time (COORD_SCALE=20). There is NO global 1/20
+      // viewbox/context scale here, so the raw twip-space matrix would over-scale
+      // the bitmap ~20x and mis-translate it ~20x.
+      //
+      // Ruffle applies the same matrix raw, but it draws geometry in twips under a
+      // bounds_viewbox_matrix with a=1/20 (set_a(1.0/20.0)); that 1/20 context
+      // cancels the 20. We lack that context, so we must pre-divide the whole
+      // matrix (scale AND translation) by 20 to convert it into the pixel space the
+      // rest of the geometry uses.
+      //
+      // NOTE: gradient fills are unaffected and use a different code path
+      // (createLinearGradient/createRadialGradient) whose matrices are already
+      // pixel-space (e.g. a~=0.0087) and multiply the GRADIENT_SIZE box. Do not
+      // apply this twip correction there.
+      const TWIPS_PER_PIXEL = 20;
+      pattern.setTransform(new DOMMatrix([
+        matrix.a / TWIPS_PER_PIXEL, matrix.b / TWIPS_PER_PIXEL,
+        matrix.c / TWIPS_PER_PIXEL, matrix.d / TWIPS_PER_PIXEL,
+        matrix.tx / TWIPS_PER_PIXEL, matrix.ty / TWIPS_PER_PIXEL
+      ]));
+    }
+
+    return pattern;
+  }
+
+  private createLinearGradient(fill: FillStyle): CanvasGradient | string {
+    if (!fill.gradient || fill.gradient.length === 0) {
+      return fill.gradient?.[0]?.color || '#000000';
+    }
+
+    // Flash gradient coordinate system: gradients span from -819.2 to 819.2 in local space
+    // (16384 twips / 20 = 819.2 pixels)
+    const GRADIENT_SIZE = 819.2;
+
+    let x0: number, y0: number, x1: number, y1: number;
+
+    if (fill.matrix) {
+      const m = fill.matrix;
+      // The gradient matrix transforms from gradient space to shape-local space
+      // Base gradient is horizontal from (-GRADIENT_SIZE, 0) to (GRADIENT_SIZE, 0)
+      x0 = m.a * (-GRADIENT_SIZE) + m.tx;
+      y0 = m.b * (-GRADIENT_SIZE) + m.ty;
+      x1 = m.a * GRADIENT_SIZE + m.tx;
+      y1 = m.b * GRADIENT_SIZE + m.ty;
+    } else {
+      // Default horizontal gradient
+      x0 = -GRADIENT_SIZE;
+      y0 = 0;
+      x1 = GRADIENT_SIZE;
+      y1 = 0;
+    }
+
+    const gradient = this.ctx.createLinearGradient(x0, y0, x1, y1);
+
+    // Add color stops, handling spread modes
+    const stops = this.getGradientStopsWithSpreadMode(fill);
+    for (const stop of stops) {
+      gradient.addColorStop(stop.ratio, stop.color);
+    }
+
+    return gradient;
+  }
+
+  private createRadialGradient(fill: FillStyle): CanvasGradient | string {
+    if (!fill.gradient || fill.gradient.length === 0) {
+      return fill.gradient?.[0]?.color || '#000000';
+    }
+
+    // Flash radial gradient: circle centered at (0, 0) with radius 819.2
+    const GRADIENT_SIZE = 819.2;
+
+    let cx = 0;
+    let cy = 0;
+    let fx = 0; // Focal point x
+    let fy = 0; // Focal point y
+    let radius = GRADIENT_SIZE;
+
+    if (fill.matrix) {
+      const m = fill.matrix;
+      // Gradient center from matrix translation
+      cx = m.tx;
+      cy = m.ty;
+
+      // Calculate average scale for radius
+      const scaleX = Math.sqrt(m.a * m.a + m.b * m.b);
+      const scaleY = Math.sqrt(m.c * m.c + m.d * m.d);
+      radius = GRADIENT_SIZE * ((scaleX + scaleY) / 2);
+
+      // Apply focal point ratio if specified.
+      // focalPointRatio is -1..1 (0 centered, negative left/up, positive right/down).
+      //
+      // Ruffle (canonical) places the focal point at
+      //   matrix * (clamp(focalPointRatio, -0.98, 0.98) * 16384 twips, 0)
+      // i.e. clamp(-0.98,0.98) * 819.2px along the gradient-box X axis, then
+      // transformed by the SAME gradient matrix that defines the outer circle
+      // (outer center = matrix*(0,0), rim reached at matrix*(819.2,0)). The clamp
+      // keeps the focus strictly inside the disc; without it focalPointRatio=-1
+      // lands the focus exactly on the outer rim, which degenerates the canvas
+      // radial gradient into a hard edge (the off-center highlight vanishes).
+      //
+      // NOTE: focal==0 (or absent) is a strict no-op — fx/fy stay at the center
+      // (cx, cy), so the common centered radial is byte-identical to before.
+      if (fill.focalPointRatio !== undefined && fill.focalPointRatio !== 0) {
+        const clampedFocal = Math.max(-0.98, Math.min(0.98, fill.focalPointRatio));
+        const focalLocalX = clampedFocal * GRADIENT_SIZE;
+        // Transform the focal point through the full gradient matrix (same space
+        // as the outer circle), matching the SVG export path (video-exporter.ts).
+        fx = m.a * focalLocalX + m.tx;
+        fy = m.b * focalLocalX + m.ty;
+      } else {
+        fx = cx;
+        fy = cy;
+      }
+    } else {
+      fx = cx;
+      fy = cy;
+    }
+
+    // Create radial gradient with focal point support
+    // Canvas createRadialGradient(x0, y0, r0, x1, y1, r1) where:
+    // - (x0, y0) is the focal point (inner circle center), r0 is inner radius
+    // - (x1, y1) is the outer circle center, r1 is outer radius
+    const gradient = this.ctx.createRadialGradient(fx, fy, 0, cx, cy, radius);
+
+    // Add color stops, handling spread modes
+    const stops = this.getGradientStopsWithSpreadMode(fill);
+    for (const stop of stops) {
+      gradient.addColorStop(stop.ratio, stop.color);
+    }
+
+    return gradient;
+  }
+
+  // Process gradient entries and handle spread modes (reflect/repeat)
+  // Canvas doesn't natively support spread modes, so we simulate them by extending the color stops
+  private getGradientStopsWithSpreadMode(fill: FillStyle): Array<{ ratio: number; color: string }> {
+    if (!fill.gradient || fill.gradient.length === 0) {
+      return [];
+    }
+
+    const baseStops = fill.gradient.map(entry => ({
+      ratio: Math.max(0, Math.min(1, entry.ratio)),
+      color: entry.alpha < 1
+        ? this.colorWithAlpha(entry.color, entry.alpha)
+        : entry.color
+    }));
+
+    // Default 'pad' mode - just use the stops as-is
+    if (!fill.spreadMethod || fill.spreadMethod === 'pad') {
+      return baseStops;
+    }
+
+    // For 'reflect' and 'repeat', we need to extend the gradient
+    // However, Canvas gradients are clamped to [0,1], so we can only simulate
+    // these modes within the visible gradient bounds
+    // The simulation works by extending color stops if the gradient is visible beyond 0-1
+
+    // For now, we provide a best-effort approximation:
+    // - 'repeat': Simply use the original stops (clamped by Canvas)
+    // - 'reflect': Duplicate stops in reverse to create a mirrored effect within bounds
+
+    if (fill.spreadMethod === 'reflect') {
+      // Create a reflected pattern by mirroring the stops
+      // This gives a symmetric gradient appearance
+      const reflectedStops: Array<{ ratio: number; color: string }> = [];
+
+      // First half: compress original gradient to 0-0.5
+      for (const stop of baseStops) {
+        reflectedStops.push({
+          ratio: stop.ratio * 0.5,
+          color: stop.color
+        });
+      }
+
+      // Second half: mirror the gradient from 0.5-1
+      for (let i = baseStops.length - 1; i >= 0; i--) {
+        const stop = baseStops[i];
+        reflectedStops.push({
+          ratio: 1 - (stop.ratio * 0.5),
+          color: stop.color
+        });
+      }
+
+      return reflectedStops;
+    }
+
+    // For 'repeat', return original stops (Canvas clamps, but appearance is close enough)
+    return baseStops;
+  }
+
+  private colorWithAlpha(color: string, alpha: number): string {
+    // Convert hex color to rgba
+    if (color.startsWith('#')) {
+      const hex = color.substring(1);
+      let r: number, g: number, b: number;
+
+      if (hex.length === 3) {
+        // #RGB format - expand to #RRGGBB
+        r = parseInt(hex[0] + hex[0], 16);
+        g = parseInt(hex[1] + hex[1], 16);
+        b = parseInt(hex[2] + hex[2], 16);
+      } else if (hex.length >= 6) {
+        // #RRGGBB or #RRGGBBAA format
+        r = parseInt(hex.substring(0, 2), 16);
+        g = parseInt(hex.substring(2, 4), 16);
+        b = parseInt(hex.substring(4, 6), 16);
+      } else {
+        // Invalid format, return as-is
+        return color;
+      }
+
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    return color;
+  }
+
+  private applyMatrix(matrix: Matrix): void {
+    this.ctx.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.tx, matrix.ty);
+  }
+
+  /**
+   * Apply a 3D instance's transform (rotationX/Y/Z about its 3D center, and
+   * z) in the document's perspective, linearized at the 3D center
+   * (src/transform-3d.ts). An instance behind the viewer draws nothing.
+   */
+  private apply3DTransform(instance: SymbolInstance): void {
+    const m = instance.matrix;
+    const tp = instance.transformationPoint;
+    const pivot = instance.centerPoint3D ?? { x: m.a * tp.x + m.c * tp.y + m.tx, y: m.b * tp.x + m.d * tp.y + m.ty };
+    // The parent's space -> stage, without the view's scale and pan.
+    const ctm = this.ctx.getTransform();
+    const toStage = this.stageBaseInverse ? this.stageBaseInverse.multiply(ctm) : ctm;
+    const projected = this.doc
+      ? projectedInstanceMatrix(
+        m,
+        pivot,
+        rotation3D(instance.rotationX, instance.rotationY, instance.rotationZ),
+        instance.z ?? 0,
+        { a: toStage.a, b: toStage.b, c: toStage.c, d: toStage.d, tx: toStage.e, ty: toStage.f },
+        documentPerspective(this.doc)
+      )
+      : null;
+    if (projected && ![projected.a, projected.b, projected.c, projected.d, projected.tx, projected.ty].every(Number.isFinite)) {
+      this.applyMatrix(m); // malformed 3D values: draw it flat rather than at the origin
+      return;
+    }
+    this.applyMatrix(projected ?? { a: 0, b: 0, c: 0, d: 0, tx: 0, ty: 0 });
+  }
+
+  // Apply filters using Canvas 2D shadow and filter API. A filter's strength
+  // scales how opaque its shadow is (1 = 100%), not how far it spreads; a canvas
+  // shadow can't be denser than its color, so strengths above 1 draw as 1.
+  private applyFilters(ctx: CanvasRenderingContext2D, filters: Filter[]): void {
+    const shadow = (color: string, alpha: number, strength: number | undefined) =>
+      this.colorWithAlpha(color, Math.min(1, Math.max(0, alpha * (strength ?? 1))));
+    // Combine multiple blur filters
+    let totalBlurX = 0;
+    let totalBlurY = 0;
+    const cssFilters: string[] = [];
+
+    for (const filter of filters) {
+      if (filter.enabled === false) continue;
+      switch (filter.type) {
+        case 'blur':
+          totalBlurX += filter.blurX;
+          totalBlurY += filter.blurY;
+          break;
+        case 'glow':
+          // Use shadow for glow effect
+          ctx.shadowColor = shadow(filter.color, filter.alpha ?? 1, filter.strength);
+          ctx.shadowBlur = Math.max(filter.blurX, filter.blurY);
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 0;
+          break;
+        case 'dropShadow':
+          const dsAngle = (filter.angle ?? 45) * Math.PI / 180;
+          ctx.shadowColor = shadow(filter.color, filter.alpha ?? 1, filter.strength);
+          ctx.shadowBlur = Math.max(filter.blurX, filter.blurY);
+          ctx.shadowOffsetX = Math.cos(dsAngle) * filter.distance;
+          ctx.shadowOffsetY = Math.sin(dsAngle) * filter.distance;
+          break;
+        case 'bevel':
+          // Bevel creates an embossed effect with highlight and shadow
+          // We approximate this using two offset shadows rendered in sequence
+          // For simplicity, we use the highlight color with offset
+          const bevelAngle = (filter.angle ?? 45) * Math.PI / 180;
+          const highlightOffsetX = -Math.cos(bevelAngle) * filter.distance;
+          const highlightOffsetY = -Math.sin(bevelAngle) * filter.distance;
+
+          // Use shadow color for the primary shadow effect
+          ctx.shadowColor = shadow(filter.shadowColor, filter.shadowAlpha ?? 1, filter.strength);
+          ctx.shadowBlur = Math.max(filter.blurX, filter.blurY);
+          ctx.shadowOffsetX = -highlightOffsetX;
+          ctx.shadowOffsetY = -highlightOffsetY;
+          break;
+        case 'colorMatrix':
+          // colorMatrix is handled by an offscreen per-pixel pass in
+          // renderSymbolInstance (see applyColorMatrixToImage), NOT here:
+          // Chromium's 2D ctx.filter does not honor data-URL SVG feColorMatrix
+          // references, so pushing url("data:image/svg+xml,...feColorMatrix...")
+          // onto ctx.filter is a silent no-op (and would also clobber any
+          // working CSS filter like blur). Deliberately do nothing in the
+          // canvas filter pass. (The SVG-export path renders feColorMatrix
+          // natively elsewhere and is unaffected.)
+          break;
+        case 'convolution':
+          // Convolution filters (sharpen, emboss, etc.) require pixel manipulation
+          // Canvas 2D doesn't support convolution natively, but we can approximate
+          // common effects like sharpen using CSS filters
+          if (this.isIdentityConvolution(filter.matrix, filter.matrixX, filter.matrixY)) {
+            // Identity matrix - no effect needed
+            break;
+          }
+          if (this.isSharpenConvolution(filter.matrix)) {
+            // Approximate sharpen with contrast
+            cssFilters.push('contrast(1.1)');
+          } else if (this.isEdgeDetectConvolution(filter.matrix)) {
+            // Edge detection - approximate with high contrast
+            cssFilters.push('contrast(2) saturate(0)');
+          }
+          // Note: Full convolution support would require getImageData/putImageData
+          break;
+        case 'gradientGlow':
+          // Gradient glow is similar to regular glow but with gradient colors
+          // We approximate using the first and last colors
+          const ggColors = filter.colors;
+          if (ggColors && ggColors.length > 0) {
+            const midColor = ggColors[Math.floor(ggColors.length / 2)];
+            ctx.shadowColor = shadow(midColor.color, midColor.alpha, filter.strength);
+            ctx.shadowBlur = Math.max(filter.blurX, filter.blurY);
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+          }
+          break;
+        case 'gradientBevel':
+          // Gradient bevel is similar to regular bevel but with gradient colors
+          const gbColors = filter.colors;
+          const gbAngle = (filter.angle ?? 45) * Math.PI / 180;
+          if (gbColors && gbColors.length > 0) {
+            const midColor = gbColors[Math.floor(gbColors.length / 2)];
+            ctx.shadowColor = shadow(midColor.color, midColor.alpha, filter.strength);
+            ctx.shadowBlur = Math.max(filter.blurX, filter.blurY);
+            ctx.shadowOffsetX = Math.cos(gbAngle) * filter.distance;
+            ctx.shadowOffsetY = Math.sin(gbAngle) * filter.distance;
+          }
+          break;
+      }
+    }
+
+    // Apply combined blur using CSS filter
+    if (totalBlurX > 0 || totalBlurY > 0) {
+      const avgBlur = (totalBlurX + totalBlurY) / 2;
+      cssFilters.push(`blur(${avgBlur}px)`);
+    }
+
+    // Combine all CSS filters
+    if (cssFilters.length > 0) {
+      ctx.filter = cssFilters.join(' ');
+    }
+  }
+
+  // Check if convolution matrix is identity (no effect)
+  private isIdentityConvolution(matrix: number[], matrixX: number, matrixY: number): boolean {
+    if (matrixX !== matrixY || matrixX < 1) return false;
+    const center = Math.floor(matrixX * matrixY / 2);
+    for (let i = 0; i < matrix.length; i++) {
+      if (i === center && matrix[i] !== 1) return false;
+      if (i !== center && matrix[i] !== 0) return false;
+    }
+    return true;
+  }
+
+  // Check if convolution is a sharpen filter
+  private isSharpenConvolution(matrix: number[]): boolean {
+    // Common sharpen kernel: [0, -1, 0, -1, 5, -1, 0, -1, 0]
+    if (matrix.length !== 9) return false;
+    const sharpen = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+    return matrix.every((v, i) => Math.abs(v - sharpen[i]) < 0.1);
+  }
+
+  // Check if convolution is an edge detection filter
+  private isEdgeDetectConvolution(matrix: number[]): boolean {
+    // Common edge detect kernels have sum close to 0 and high center value
+    if (matrix.length < 9) return false;
+    const sum = matrix.reduce((a, b) => a + b, 0);
+    const center = matrix[Math.floor(matrix.length / 2)];
+    return Math.abs(sum) < 0.1 && center > 0;
+  }
+
+  // Clear all filter effects
+  private clearFilters(ctx: CanvasRenderingContext2D): void {
+    ctx.filter = 'none';
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+  }
+
+  // Map Flash blend mode to Canvas globalCompositeOperation
+  private mapBlendMode(blendMode: BlendMode): GlobalCompositeOperation {
+    const blendModeMap: Record<BlendMode, GlobalCompositeOperation> = {
+      'normal': 'source-over',
+      'layer': 'source-over',      // Layer behaves like normal in most cases
+      'multiply': 'multiply',
+      'screen': 'screen',
+      'overlay': 'overlay',
+      'darken': 'darken',
+      'lighten': 'lighten',
+      'hardlight': 'hard-light',
+      'add': 'lighter',            // 'add' in Flash is 'lighter' in Canvas
+      'subtract': 'difference',    // Approximate - Canvas doesn't have true subtract
+      'difference': 'difference',
+      'invert': 'exclusion',       // Approximate - Canvas doesn't have true invert
+      'alpha': 'source-over',      // Alpha mode is complex, fallback to normal
+      'erase': 'destination-out',  // Erases underlying content
+    };
+
+    return blendModeMap[blendMode] || 'source-over';
+  }
+
+  // Apply the ALPHA part of a color transform to the context.
+  //
+  // Flash color transforms are per-channel affine maps; alpha is
+  //   a' = clamp(a * alphaMultiplier + alphaOffset, 0, 255).
+  // The alpha multiplier maps cleanly onto ctx.globalAlpha (applied exactly
+  // once here). The RGB part (c' = clamp(c*mult + offset)) is handled
+  // separately via an offscreen per-pixel pass — see applyColorTransformToImage
+  // and the offscreen branch in renderSymbolInstance — because Chromium's 2D
+  // canvas ctx.filter does not reliably honor data-URL SVG feColorMatrix
+  // filters. Any alphaOffset is folded into globalAlpha approximately (rare in
+  // practice; tint never sets it).
+  private applyColorTransform(ctx: CanvasRenderingContext2D, transform: ColorTransform): void {
+    if (transform.alphaMultiplier !== undefined) {
+      ctx.globalAlpha *= transform.alphaMultiplier;
+    }
+    const aOff = transform.alphaOffset ?? 0;
+    if (aOff !== 0) {
+      // alphaOffset is in 0..255 scale; approximate as an additive opacity bump.
+      ctx.globalAlpha = Math.max(0, Math.min(1, ctx.globalAlpha + aOff / 255));
+    }
+  }
+
+  // True when the RGB part of the transform is non-identity (i.e. needs the
+  // per-channel c*mult+offset pass, which covers tint).
+  private colorTransformAffectsRGB(transform: ColorTransform): boolean {
+    const rMult = transform.redMultiplier ?? 1;
+    const gMult = transform.greenMultiplier ?? 1;
+    const bMult = transform.blueMultiplier ?? 1;
+    const rOff = transform.redOffset ?? 0;
+    const gOff = transform.greenOffset ?? 0;
+    const bOff = transform.blueOffset ?? 0;
+    return (
+      Math.abs(rMult - 1) > 1e-6 || Math.abs(gMult - 1) > 1e-6 || Math.abs(bMult - 1) > 1e-6 ||
+      Math.abs(rOff) > 1e-6 || Math.abs(gOff) > 1e-6 || Math.abs(bOff) > 1e-6
+    );
+  }
+
+  // Apply the per-channel RGB color transform c' = clamp(c*mult + offset, 0, 255)
+  // in place over the given region of a canvas's pixels. Only touches pixels with
+  // non-zero alpha so fully transparent areas stay transparent. Offsets are in
+  // the 0..255 scale (matching Flash and the parser's tint conversion).
+  private applyColorTransformToImage(
+    offCtx: CanvasRenderingContext2D,
+    transform: ColorTransform,
+    x: number,
+    y: number,
+    w: number,
+    h: number
+  ): void {
+    if (w <= 0 || h <= 0) return;
+    const rMult = transform.redMultiplier ?? 1;
+    const gMult = transform.greenMultiplier ?? 1;
+    const bMult = transform.blueMultiplier ?? 1;
+    const rOff = transform.redOffset ?? 0;
+    const gOff = transform.greenOffset ?? 0;
+    const bOff = transform.blueOffset ?? 0;
+
+    const image = offCtx.getImageData(x, y, w, h);
+    const d = image.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3];
+      if (a === 0) continue; // leave fully-transparent pixels untouched
+      d[i] = Math.max(0, Math.min(255, d[i] * rMult + rOff));
+      d[i + 1] = Math.max(0, Math.min(255, d[i + 1] * gMult + gOff));
+      d[i + 2] = Math.max(0, Math.min(255, d[i + 2] * bMult + bOff));
+    }
+    offCtx.putImageData(image, x, y);
+  }
+
+  // True when the filter list contains at least one colorMatrix filter (so the
+  // instance needs the offscreen per-pixel pass — ctx.filter does not honor
+  // data-URL SVG feColorMatrix in Chromium, see applyColorMatrixToImage).
+  private filtersHaveColorMatrix(filters: Filter[] | undefined): boolean {
+    return !!filters && filters.some(f => f.enabled !== false && f.type === 'colorMatrix' && Array.isArray(f.matrix) && f.matrix.length === 20);
+  }
+
+  // Apply a 4x5 colorMatrix per pixel in place over the given region of a
+  // canvas's pixels: [r',g',b',a'] = M . [r,g,b,a,1], clamped to [0,255].
+  //
+  // Offset-scale convention (matched EXACTLY to the SVG feColorMatrix path so
+  // canvas == SVG export): the parser stores the matrix with multiplier
+  // coefficients that act on channels treated as 0..1 (SVG feColorMatrix
+  // convention) but with the 5th-column offsets in the 0..255 scale (see
+  // buildAdjustColorMatrix in fla-parser.ts, which adds brightness*2.55 and
+  // t*255 into the offset columns). The SVG path divides those offsets by 255 to
+  // feed SVG's 0..1 offsets. getImageData pixels are straight (un-premultiplied)
+  // RGBA in 0..255. Because the multiplier part is a linear combination it is
+  // scale-invariant (m*255c == 255*(m*c)), so on 0..255 channels we apply the
+  // multipliers directly and ADD the stored 0..255 offset — algebraically
+  // identical to the SVG path's normalize/denormalize. The alpha row is applied
+  // the same way.
+  private applyColorMatrixToImage(
+    offCtx: CanvasRenderingContext2D,
+    matrix: number[],
+    x: number,
+    y: number,
+    w: number,
+    h: number
+  ): void {
+    if (w <= 0 || h <= 0) return;
+    if (!Array.isArray(matrix) || matrix.length !== 20) return;
+    const m = matrix;
+    const image = offCtx.getImageData(x, y, w, h);
+    const d = image.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], b = d[i + 2], a = d[i + 3];
+      // Multipliers (indices *0..*3) act linearly on the 0..255 channels; the
+      // offset column (indices *4) is already in the 0..255 scale.
+      const nr = m[0]  * r + m[1]  * g + m[2]  * b + m[3]  * a + m[4];
+      const ng = m[5]  * r + m[6]  * g + m[7]  * b + m[8]  * a + m[9];
+      const nb = m[10] * r + m[11] * g + m[12] * b + m[13] * a + m[14];
+      const na = m[15] * r + m[16] * g + m[17] * b + m[18] * a + m[19];
+      d[i]     = nr < 0 ? 0 : nr > 255 ? 255 : nr;
+      d[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : ng;
+      d[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : nb;
+      d[i + 3] = na < 0 ? 0 : na > 255 ? 255 : na;
+    }
+    offCtx.putImageData(image, x, y);
+  }
+
+  // Build the closed path of one morph segment interpolated at `progress`.
+  private buildMorphSegmentPath(segment: MorphSegment, progress: number): Path2D {
+    const path = new Path2D();
+
+    // Interpolate start point
+    const startX = this.lerp(segment.startPointA.x, segment.startPointB.x, progress);
+    const startY = this.lerp(segment.startPointA.y, segment.startPointB.y, progress);
+    path.moveTo(startX, startY);
+
+    // Interpolate each curve
+    for (const curve of segment.curves) {
+      const ctrlX = this.lerp(curve.controlPointA.x, curve.controlPointB.x, progress);
+      const ctrlY = this.lerp(curve.controlPointA.y, curve.controlPointB.y, progress);
+      const anchorX = this.lerp(curve.anchorPointA.x, curve.anchorPointB.x, progress);
+      const anchorY = this.lerp(curve.anchorPointA.y, curve.anchorPointB.y, progress);
+
+      if (curve.isLine) {
+        path.lineTo(anchorX, anchorY);
+      } else {
+        path.quadraticCurveTo(ctrlX, ctrlY, anchorX, anchorY);
+      }
+    }
+
+    path.closePath();
+    return path;
+  }
+
+  // Signed area (winding direction) of one morph segment at `progress`, using
+  // the control polygon (same shoelace convention as getOrComputeShapePaths).
+  private morphSegmentArea(segment: MorphSegment, progress: number): number {
+    const startX = this.lerp(segment.startPointA.x, segment.startPointB.x, progress);
+    const startY = this.lerp(segment.startPointA.y, segment.startPointB.y, progress);
+    let area = 0;
+    let px = startX;
+    let py = startY;
+    const visit = (x: number, y: number) => {
+      area += px * y - x * py;
+      px = x;
+      py = y;
+    };
+    for (const curve of segment.curves) {
+      if (!curve.isLine) {
+        visit(this.lerp(curve.controlPointA.x, curve.controlPointB.x, progress),
+          this.lerp(curve.controlPointA.y, curve.controlPointB.y, progress));
+      }
+      visit(this.lerp(curve.anchorPointA.x, curve.anchorPointB.x, progress),
+        this.lerp(curve.anchorPointA.y, curve.anchorPointB.y, progress));
+    }
+    visit(startX, startY);
+    return area / 2;
+  }
+
+  // Render a morph shape (shape tween) at the given progress
+  private renderMorphShape(
+    morphShape: MorphShape,
+    startShape: Shape,
+    progress: number,
+    depth: number
+  ): void {
+    const ctx = this.ctx;
+    ctx.save();
+
+    // Apply shape's transformation matrix
+    this.applyMatrix(startShape.matrix);
+
+    // Build fill style lookup from start shape
+    const fillStyles = new Map<number, FillStyle>();
+    for (const fill of startShape.fills) {
+      fillStyles.set(fill.index, fill);
+    }
+
+    // Build stroke style lookup from start shape
+    const strokeStyles = new Map<number, StrokeStyle>();
+    for (const stroke of startShape.strokes) {
+      strokeStyles.set(stroke.index, stroke);
+    }
+
+    // Render each segment
+    for (const segment of morphShape.segments) {
+      const path = this.buildMorphSegmentPath(segment, progress);
+
+      // Apply fill from segment indices
+      const fillIndex = segment.fillIndex1 ?? segment.fillIndex2;
+      if (fillIndex !== undefined) {
+        const fill = fillStyles.get(fillIndex);
+        if (fill) {
+          ctx.fillStyle = this.getFillStyle(fill);
+          ctx.fill(path, 'nonzero');
+        }
+      }
+
+      // Apply stroke from segment indices
+      const strokeIndex = segment.strokeIndex1 ?? segment.strokeIndex2;
+      if (strokeIndex !== undefined) {
+        const stroke = strokeStyles.get(strokeIndex);
+        if (stroke && stroke.color) {
+          ctx.strokeStyle = stroke.color;
+          ctx.lineWidth = stroke.weight;
+          ctx.lineCap = stroke.caps === 'none' ? 'butt' : stroke.caps || 'round';
+          ctx.lineJoin = stroke.joints || 'round';
+          // Apply miter limit (Flash default is 3)
+          ctx.miterLimit = stroke.miterLimit ?? 3;
+          ctx.stroke(path);
+        }
+      }
+    }
+
+    // Track for debug mode
+    if (this.debugMode) {
+      const combinedPath = new Path2D();
+      for (const segment of morphShape.segments) {
+        const startX = this.lerp(segment.startPointA.x, segment.startPointB.x, progress);
+        const startY = this.lerp(segment.startPointA.y, segment.startPointB.y, progress);
+        combinedPath.moveTo(startX, startY);
+        for (const curve of segment.curves) {
+          const anchorX = this.lerp(curve.anchorPointA.x, curve.anchorPointB.x, progress);
+          const anchorY = this.lerp(curve.anchorPointA.y, curve.anchorPointB.y, progress);
+          if (curve.isLine) {
+            combinedPath.lineTo(anchorX, anchorY);
+          } else {
+            const ctrlX = this.lerp(curve.controlPointA.x, curve.controlPointB.x, progress);
+            const ctrlY = this.lerp(curve.controlPointA.y, curve.controlPointB.y, progress);
+            combinedPath.quadraticCurveTo(ctrlX, ctrlY, anchorX, anchorY);
+          }
+        }
+        combinedPath.closePath();
+      }
+
+      this.debugElements.push({
+        type: 'shape',
+        element: startShape,
+        path: combinedPath,
+        transform: ctx.getTransform(),
+        depth,
+        parentPath: [...this.debugSymbolPath],
+        fillStyles,
+        strokeStyles,
+        edges: startShape.edges
+      });
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Render a symbol with 9-slice scaling.
+   *
+   * 9-slice scaling divides the symbol into 9 regions:
+   * +---+---+---+
+   * | 1 | 2 | 3 |  (top row)
+   * +---+---+---+
+   * | 4 | 5 | 6 |  (middle row)
+   * +---+---+---+
+   * | 7 | 8 | 9 |  (bottom row)
+   * +---+---+---+
+   *
+   * - Corners (1,3,7,9): No scaling
+   * - Top/Bottom edges (2,8): Horizontal scaling only
+   * - Left/Right edges (4,6): Vertical scaling only
+   * - Center (5): Both horizontal and vertical scaling
+   */
+
+  // Whether a movie clip instance appears anywhere in the symbol's timeline,
+  // directly or inside nested graphics and buttons (memoized per symbol, and
+  // per search for answers a cycle keeps from being final).
+  private hasMovieClipInside(
+    symbol: Symbol,
+    visiting = new Set<Symbol>(),
+    cycle = { cut: false },
+    searched = new Map<Symbol, boolean>()
+  ): boolean {
+    const known = this.movieClipInsideCache.get(symbol) ?? searched.get(symbol);
+    if (known !== undefined) return known;
+    if (!this.doc) return false;
+    if (visiting.has(symbol)) {
+      cycle.cut = true;
+      return false;
+    }
+    visiting.add(symbol);
+    let found = false;
+    for (const layer of symbol.timeline.layers) {
+      for (const frame of layer.frames) {
+        for (const element of frame.elements) {
+          if (element.type !== 'symbol') continue;
+          const inner = getWithNormalizedPath(this.doc.symbols, element.libraryItemName);
+          if (element.symbolType === 'movieclip' || (inner && this.hasMovieClipInside(inner, visiting, cycle, searched))) {
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (found) break;
+    }
+    visiting.delete(symbol);
+    // A symbol on a cycle was skipped while still being searched, so a "no"
+    // below the outermost call isn't final yet. Within this search it is: the
+    // symbol being searched answers for whatever the cycle cut off.
+    if (found || !cycle.cut || visiting.size === 0) this.movieClipInsideCache.set(symbol, found);
+    searched.set(symbol, found);
+    return found;
+  }
+
+  /**
+   * Render a symbol using cached bitmap for improved performance.
+   * The symbol is rendered once to an offscreen canvas and then reused.
+   */
+  private renderSymbolFromCache(
+    symbol: Symbol,
+    _instance: SymbolInstance,
+    depth: number
+  ): void {
+    const cacheKey = `${symbol.name}:${symbol.itemID}`;
+    let cached = this.symbolBitmapCache.get(cacheKey);
+
+    if (!cached) {
+      // Calculate symbol bounds (estimate based on document size or use a default)
+      const symbolWidth = this.doc?.width || 550;
+      const symbolHeight = this.doc?.height || 400;
+      const padding = 50;
+
+      // Create offscreen canvas
+      const offscreenCanvas = document.createElement('canvas');
+      offscreenCanvas.width = Math.ceil(symbolWidth + padding * 2);
+      offscreenCanvas.height = Math.ceil(symbolHeight + padding * 2);
+      const offCtx = offscreenCanvas.getContext('2d');
+
+      if (!offCtx) {
+        // Fallback to normal rendering
+        this.renderTimeline(symbol.timeline, 0, depth + 1);
+        return;
+      }
+
+      // Temporarily swap context to render to offscreen canvas
+      const savedCtx = this.ctx;
+      const savedScale = this.scale;
+      this.ctx = offCtx;
+      this.scale = 1;
+
+      // Translate to center the content
+      offCtx.translate(padding, padding);
+
+      // Render the symbol's timeline at frame 0
+      this.renderTimeline(symbol.timeline, 0, depth + 1);
+
+      // Restore original context
+      this.ctx = savedCtx;
+      this.scale = savedScale;
+
+      // Cache the result
+      cached = {
+        canvas: offscreenCanvas,
+        bounds: {
+          width: symbolWidth,
+          height: symbolHeight,
+          offsetX: padding,
+          offsetY: padding
+        }
+      };
+      this.symbolBitmapCache.set(cacheKey, cached);
+    }
+
+    // Draw the cached bitmap
+    this.ctx.drawImage(
+      cached.canvas,
+      cached.bounds.offsetX, cached.bounds.offsetY,
+      cached.bounds.width, cached.bounds.height,
+      0, 0,
+      cached.bounds.width, cached.bounds.height
+    );
+  }
+
+  private renderSymbolWith9Slice(
+    symbol: Symbol,
+    instance: SymbolInstance,
+    scale9Grid: Rectangle,
+    symbolFrame: number,
+    depth: number
+  ): void {
+    const ctx = this.ctx;
+
+    // Calculate the symbol's original bounds
+    // The scale9Grid is defined relative to the symbol's internal coordinates
+    const gridLeft = scale9Grid.left;
+    const gridTop = scale9Grid.top;
+    const gridRight = gridLeft + scale9Grid.width;
+    const gridBottom = gridTop + scale9Grid.height;
+
+    // Get the instance's transformation matrix
+    const m = instance.matrix;
+
+    // Extract scale factors from the matrix
+    // For a 2D affine matrix [a, b, c, d, tx, ty]:
+    // scaleX = sqrt(a² + b²), scaleY = sqrt(c² + d²)
+    const scaleX = Math.sqrt(m.a * m.a + m.b * m.b);
+    const scaleY = Math.sqrt(m.c * m.c + m.d * m.d);
+
+    // If scales are very close to 1, just render normally without 9-slice
+    if (Math.abs(scaleX - 1) < 0.01 && Math.abs(scaleY - 1) < 0.01) {
+      this.applyMatrix(m);
+      this.renderTimeline(symbol.timeline, symbolFrame, depth + 1);
+      return;
+    }
+
+    // We need to estimate the symbol's bounds for 9-slice to work
+    // Use the scale9Grid as a hint for the symbol size
+    // Typically the grid is inside the symbol, so we expand it
+    const symbolWidth = gridRight + gridLeft; // Assume symmetric
+    const symbolHeight = gridBottom + gridTop;
+
+    // Calculate the scaled dimensions
+    const scaledWidth = symbolWidth * scaleX;
+    const scaledHeight = symbolHeight * scaleY;
+
+    // Calculate the 9-slice region sizes
+    // Original sizes
+    const leftWidth = gridLeft;
+    const centerWidth = scale9Grid.width;
+    const rightWidth = symbolWidth - gridRight;
+    const topHeight = gridTop;
+    const centerHeight = scale9Grid.height;
+    const bottomHeight = symbolHeight - gridBottom;
+
+    // Scaled center size (corners stay fixed)
+    const scaledCenterWidth = Math.max(0, scaledWidth - leftWidth - rightWidth);
+    const scaledCenterHeight = Math.max(0, scaledHeight - topHeight - bottomHeight);
+
+    // Save current state
+    ctx.save();
+
+    // Apply translation and rotation from the matrix (but not scale)
+    // We'll handle scaling ourselves per-region
+    const rotation = Math.atan2(m.b, m.a);
+    ctx.translate(m.tx, m.ty);
+    ctx.rotate(rotation);
+
+    // Create an offscreen canvas to render the symbol at original size
+    const offscreenCanvas = document.createElement('canvas');
+    const padding = 10; // Add padding to avoid edge clipping
+    offscreenCanvas.width = Math.ceil(symbolWidth + padding * 2);
+    offscreenCanvas.height = Math.ceil(symbolHeight + padding * 2);
+    const offCtx = offscreenCanvas.getContext('2d');
+
+    if (!offCtx) {
+      // Fallback to normal rendering
+      ctx.restore();
+      this.applyMatrix(m);
+      this.renderTimeline(symbol.timeline, symbolFrame, depth + 1);
+      return;
+    }
+
+    // Temporarily swap context to render to offscreen canvas
+    const savedCtx = this.ctx;
+    const savedScale = this.scale;
+    this.ctx = offCtx;
+    this.scale = 1;
+
+    // Translate to center the content in the offscreen canvas
+    offCtx.translate(padding, padding);
+
+    // Render the symbol's content to the offscreen canvas
+    this.renderTimeline(symbol.timeline, symbolFrame, depth + 1);
+
+    // Restore original context
+    this.ctx = savedCtx;
+    this.scale = savedScale;
+
+    // Now draw the 9 regions with appropriate scaling
+    // Region coordinates in the source (offscreen canvas)
+    const srcRegions = {
+      // x, y, width, height for each region in source
+      topLeft: { x: padding, y: padding, w: leftWidth, h: topHeight },
+      topCenter: { x: padding + leftWidth, y: padding, w: centerWidth, h: topHeight },
+      topRight: { x: padding + leftWidth + centerWidth, y: padding, w: rightWidth, h: topHeight },
+      middleLeft: { x: padding, y: padding + topHeight, w: leftWidth, h: centerHeight },
+      middleCenter: { x: padding + leftWidth, y: padding + topHeight, w: centerWidth, h: centerHeight },
+      middleRight: { x: padding + leftWidth + centerWidth, y: padding + topHeight, w: rightWidth, h: centerHeight },
+      bottomLeft: { x: padding, y: padding + topHeight + centerHeight, w: leftWidth, h: bottomHeight },
+      bottomCenter: { x: padding + leftWidth, y: padding + topHeight + centerHeight, w: centerWidth, h: bottomHeight },
+      bottomRight: { x: padding + leftWidth + centerWidth, y: padding + topHeight + centerHeight, w: rightWidth, h: bottomHeight }
+    };
+
+    // Destination coordinates
+    const dstRegions = {
+      topLeft: { x: 0, y: 0, w: leftWidth, h: topHeight },
+      topCenter: { x: leftWidth, y: 0, w: scaledCenterWidth, h: topHeight },
+      topRight: { x: leftWidth + scaledCenterWidth, y: 0, w: rightWidth, h: topHeight },
+      middleLeft: { x: 0, y: topHeight, w: leftWidth, h: scaledCenterHeight },
+      middleCenter: { x: leftWidth, y: topHeight, w: scaledCenterWidth, h: scaledCenterHeight },
+      middleRight: { x: leftWidth + scaledCenterWidth, y: topHeight, w: rightWidth, h: scaledCenterHeight },
+      bottomLeft: { x: 0, y: topHeight + scaledCenterHeight, w: leftWidth, h: bottomHeight },
+      bottomCenter: { x: leftWidth, y: topHeight + scaledCenterHeight, w: scaledCenterWidth, h: bottomHeight },
+      bottomRight: { x: leftWidth + scaledCenterWidth, y: topHeight + scaledCenterHeight, w: rightWidth, h: bottomHeight }
+    };
+
+    // Draw each region (skip if width or height is 0)
+    const drawRegion = (src: { x: number; y: number; w: number; h: number }, dst: { x: number; y: number; w: number; h: number }) => {
+      if (src.w > 0 && src.h > 0 && dst.w > 0 && dst.h > 0) {
+        ctx.drawImage(
+          offscreenCanvas,
+          src.x, src.y, src.w, src.h,
+          dst.x, dst.y, dst.w, dst.h
+        );
+      }
+    };
+
+    // Draw all 9 regions
+    drawRegion(srcRegions.topLeft, dstRegions.topLeft);
+    drawRegion(srcRegions.topCenter, dstRegions.topCenter);
+    drawRegion(srcRegions.topRight, dstRegions.topRight);
+    drawRegion(srcRegions.middleLeft, dstRegions.middleLeft);
+    drawRegion(srcRegions.middleCenter, dstRegions.middleCenter);
+    drawRegion(srcRegions.middleRight, dstRegions.middleRight);
+    drawRegion(srcRegions.bottomLeft, dstRegions.bottomLeft);
+    drawRegion(srcRegions.bottomCenter, dstRegions.bottomCenter);
+    drawRegion(srcRegions.bottomRight, dstRegions.bottomRight);
+
+    ctx.restore();
+  }
+}

@@ -1,0 +1,22 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+:root{color-scheme:dark;font:13px "Segoe UI","Microsoft YaHei",sans-serif;background:#25232b;color:#eee}
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;overflow:hidden}
+main{height:100%;padding:4px}
+button{position:relative;display:flex;align-items:center;justify-content:center;gap:0;width:100%;height:100%;min-width:0;padding:3px;border:1px solid #9b7ded;border-radius:7px;background:linear-gradient(120deg,#9367de,#7355bd);color:#fff;font:600 0/0 "Segoe UI","Microsoft YaHei",sans-serif;letter-spacing:0;white-space:nowrap;overflow:hidden;cursor:pointer}
+button::before{content:"";display:block;flex:0 0 24px;width:24px;height:24px;background:url("icon.png") center/contain no-repeat}
+button::after{content:"";position:absolute;right:3px;bottom:3px;width:5px;height:5px;border-radius:50%;background:#d8c5ff;box-shadow:0 0 0 1px #211c2b}
+button:hover:not(:disabled){background:linear-gradient(120deg,#a178e8,#8265ca)}
+button:active:not(:disabled){background:#7250b8}
+button:focus-visible{outline:2px solid #d5c3ff;outline-offset:2px}
+button:disabled{cursor:default}
+button[data-state="waiting"]{background:#34313d;border-color:#4b4658;color:#b8b1c5}
+button[data-state="waiting"]::before{opacity:.75}
+button[data-state="waiting"]::after{background:#a69caf}
+button[data-state="busy"]{background:#44345d;border-color:#8c6ac0;color:#e4d7ff}
+button[data-state="busy"]::after{background:#f2cd83}
+button[data-state="success"]{background:#2d493e;border-color:#557866;color:#b7ebcc}
+button[data-state="success"]::after{background:#9cdcb9}
+button[data-state="error"]{background:#503739;border-color:#865558;color:#ffccd0}
+button[data-state="error"]::after{background:#f1a4a9}
+@media(min-width:120px){button{gap:7px;font-size:13px;line-height:normal;letter-spacing:.3px}button::before{flex-basis:22px;width:22px;height:22px}}

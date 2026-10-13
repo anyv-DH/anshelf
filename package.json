@@ -1,0 +1,77 @@
+{
+  "name": "anshelf",
+  "version": "0.3.2",
+  "description": "安安素材管理器 — Adobe Animate 本地素材库",
+  "private": true,
+  "type": "module",
+  "author": "安屿动画",
+  "license": "Apache-2.0",
+  "x-commercial-attribution-policy": "COMMERCIAL-ATTRIBUTION.md",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "test": "node --test tests/*.test.cjs ui/*.test.mjs",
+    "build": "node scripts/build.cjs",
+    "start": "electron .",
+    "dev": "node desktop/dev.cjs",
+    "package": "node scripts/build.cjs && electron-builder --win portable nsis",
+    "e2e": "node scripts/e2e.cjs"
+  },
+  "dependencies": {
+    "gifenc": "1.0.3",
+    "jszip": "3.10.1",
+    "pako": "2.1.0"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.25.12"
+  },
+  "build": {
+    "appId": "com.anshelf.desktop",
+    "productName": "安安素材管理器",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "core/**/*",
+      "dist/**/*",
+      "plugin/**/*",
+      "demo/**/*",
+      "README.md",
+      "LICENSE",
+      "NOTICE",
+      "COMMERCIAL-ATTRIBUTION.md",
+      "THIRD_PARTY_NOTICES.md",
+      "package.json"
+    ],
+    "asar": true,
+    "extraResources": [
+      {
+        "from": "plugin",
+        "to": "AnimatePlugin"
+      },
+      {
+        "from": "vendor/licenses",
+        "to": "licenses"
+      },
+      {
+        "from": "desktop/native/stage-target.exe",
+        "to": "StageTarget/stage-target.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "desktop/icon.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

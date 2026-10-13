@@ -1,0 +1,604 @@
+// Core FLA document types
+
+import type { MotionObjectTween } from './motion-object';
+
+export interface FLADocument {
+  width: number;
+  height: number;
+  frameRate: number;
+  backgroundColor: string;
+  viewAngle3D?: number; // 3D perspective angle in degrees (CS4+); Flash's default is 55
+  vanishingPoint3D?: Point; // 3D vanishing point; default is the stage center
+  timelines: Timeline[];
+  symbols: Map<string, Symbol>;
+  bitmaps: Map<string, BitmapItem>;
+  sounds: Map<string, SoundItem>;
+  videos: Map<string, VideoItem>;
+}
+
+export interface BitmapItem {
+  name: string;
+  href: string; // Filename in archive
+  bitmapDataHRef?: string; // Binary data filename in bin/ folder (e.g., "M 1 1731603320.dat")
+  width: number; // In pixels
+  height: number; // In pixels
+  sourceExternalFilepath?: string;
+  imageData?: HTMLImageElement; // Loaded image (if available)
+}
+
+export interface SoundItem {
+  name: string;
+  href: string; // Filename in archive
+  soundDataHRef?: string; // Binary data filename in bin/ folder for PCM audio
+  format?: string; // e.g., "44kHz 16bit Stereo"
+  sampleCount?: number;
+  dataLength?: number; // Byte length of the compressed stream (MP3) within the .dat, when declared
+  sampleRate?: number; // Parsed sample rate in Hz (e.g., 44100)
+  bitDepth?: number; // Parsed bit depth (e.g., 8, 16)
+  channels?: number; // Parsed channel count (1=mono, 2=stereo)
+  isADPCM?: boolean; // True if audio is ADPCM compressed
+  audioData?: AudioBuffer; // Loaded audio (if available)
+}
+
+export interface VideoItem {
+  name: string;
+  href: string; // Binary data filename in archive (videoDataHRef)
+  width: number; // In pixels
+  height: number; // In pixels
+  fps?: number;
+  duration?: number; // Length in seconds
+  videoType?: string; // e.g., "h263 media"
+  sourceExternalFilepath?: string;
+  // Parsed FLV data (if available)
+  flvData?: ParsedFLVData;
+  // Object URL of an embedded native video stream (e.g. MP4 wrapped in the .dat)
+  // that the browser can decode directly. Set by the parser, drawn by the renderer.
+  videoUrl?: string;
+}
+
+// Simplified FLV data stored in VideoItem (full ParsedFLV is in flv-parser.ts)
+export interface ParsedFLVData {
+  hasVideo: boolean;
+  hasAudio: boolean;
+  videoCodec: string | null;  // Codec name
+  audioCodec: string | null;  // Codec name
+  duration: number;           // In seconds
+  frameCount: number;         // Total video frames
+  keyframeCount: number;      // Number of keyframes
+  audioSampleRate?: number;
+  audioChannels?: number;     // 1 = mono, 2 = stereo
+}
+
+export interface Timeline {
+  name: string;
+  layers: Layer[];
+  totalFrames: number;
+  cameraLayerIndex?: number; // Index of the camera layer for camera transforms
+  /**
+   * Index of Animate's native camera layer (`layerType="camera"`, CC 2017+) when
+   * the timeline's camera is enabled. Its `__Camera__` instance drives the view
+   * of every layer not attached to the camera (src/native-camera.ts).
+   */
+  nativeCameraLayerIndex?: number;
+  referenceLayers: Set<number>; // Indices of layers that should not be rendered (guides, camera frames, etc.)
+}
+
+export interface Layer {
+  name: string;
+  color: string;
+  visible: boolean;
+  locked: boolean;
+  outline: boolean; // Editor-only outline view (not rendered)
+  transparent?: boolean; // Layer has transparency/onion-skin enabled
+  alphaPercent?: number; // Layer alpha percentage (0-100)
+  layerType?: 'normal' | 'guide' | 'folder' | 'camera' | 'mask' | 'masked';
+  parentLayerIndex?: number;
+  maskLayerIndex?: number; // For masked layers, index of the mask layer
+  attachedToCamera?: boolean; // Pinned to the native camera: drawn without the camera's view
+  frames: Frame[];
+}
+
+export interface Frame {
+  index: number;
+  duration: number;
+  keyMode: number;
+  tweenType?: 'motion' | 'shape' | 'none' | 'motion object' | 'IK pose';
+  acceleration?: number;
+  /**
+   * CS4+ object-based motion tween (`tweenType="motion object"`): the span's
+   * property curves from `<motionObjectXML><AnimationCore>`, applied to the
+   * frame's elements by the renderer.
+   */
+  motionObject?: MotionObjectTween;
+  /**
+   * IK pose span (`tweenType="IK pose"`, a Bone tool armature): the per-frame
+   * transforms Flash baked into `<betweenFrameMatrixList>`, indexed
+   * `[elementIndex][frameIndex - index]`. Each applies in the parent's space on
+   * top of the element's own matrix (`pose * matrix`); the first is the identity.
+   */
+  ikPoseMatrices?: Matrix[][];
+  /**
+   * Layer depth at this keyframe (`frameZDepth`, Animate 2019+): negative is
+   * nearer the camera, positive further away. Absent means 0.
+   */
+  zDepth?: number;
+  elements: DisplayElement[];
+  tweens?: Tween[];
+  sound?: FrameSound;
+  morphShape?: MorphShape; // For shape tweens
+  label?: string; // Frame label name
+  labelType?: 'name' | 'comment' | 'anchor'; // Type of frame label
+  /**
+   * Raw ActionScript source attached to this keyframe (the frame action), from
+   * `<DOMFrame><Actionscript><script>`. Captured for tooling (AS code
+   * intelligence); the renderer does not execute it. Instance-level `on()`/`onClipEvent()` handlers live on the
+   * instance, not here.
+   */
+  actionScript?: string;
+  // Motion tween properties
+  motionTweenRotate?: 'cw' | 'ccw' | 'none'; // Rotation direction
+  motionTweenRotateTimes?: number; // Number of full rotations
+  motionTweenScale?: boolean; // Enable scale interpolation
+  motionTweenOrientToPath?: boolean; // Orient to motion path
+}
+
+export interface FrameSound {
+  name: string; // Reference to SoundItem name
+  sync: 'event' | 'start' | 'stop' | 'stream';
+  inPoint44?: number; // Start point in samples at 44kHz
+  outPoint44?: number; // End point in samples at 44kHz
+  loopCount?: number;
+}
+
+// Penner easing families that Adobe Animate / CreateJS reference by name.
+// These are the BASE of a method token; the direction (In/Out/InOut) is a
+// separate suffix on the token, not part of this set.
+export type EaseBase =
+  | 'quad'
+  | 'cubic'
+  | 'quart'
+  | 'quint'
+  | 'sine'
+  | 'circ'
+  | 'expo'
+  | 'back'
+  | 'elastic'
+  | 'bounce';
+
+export type EaseDirection = 'in' | 'out' | 'inOut';
+
+// The `method` attribute on <Ease> is stored RAW as Adobe writes it. Modern
+// Animate files use CreateJS-style "<base><Direction>" tokens where the
+// direction is part of the token (e.g. "cubicIn", "backOut", "quadInOut"),
+// plus the special "none" (linear). Decomposition into (base, direction)
+// happens in the renderer. Legacy intensity-only eases have NO method at all.
+export interface Tween {
+  target: string;
+  intensity?: number;
+  method?: string;
+  customEase?: Point[];
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export type DisplayElement = SymbolInstance | Shape | VideoInstance | BitmapInstance | TextInstance;
+
+// Flash/Animate blend modes
+export type BlendMode =
+  | 'normal'
+  | 'layer'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'hardlight'
+  | 'add'
+  | 'subtract'
+  | 'difference'
+  | 'invert'
+  | 'alpha'
+  | 'erase';
+
+/**
+ * A single author-time component parameter (<PD> element under <persistentData>).
+ * `type` is the raw XFL persistent-data type code (e.g. "0"=string/number).
+ */
+export interface ComponentParameter {
+  name: string;
+  value: string;
+  type?: string;
+}
+
+export interface SymbolInstance {
+  type: 'symbol';
+  libraryItemName: string;
+  symbolType: 'graphic' | 'movieclip' | 'button';
+  /**
+   * Instance name set in the Properties panel — the identifier ActionScript
+   * uses to reference this object on the timeline (e.g. `myClip._x`). Absent for
+   * unnamed instances. Captured for tooling (e.g. code completion); the renderer
+   * does not use it.
+   */
+  name?: string;
+  matrix: Matrix;
+  transformationPoint: Point;
+  centerPoint3D?: Point; // 3D transformation center point
+  // Graphic playback mode; the reverse modes were added in Animate 2021.
+  loop: 'loop' | 'play once' | 'single frame' | 'loop reverse' | 'play once reverse';
+  firstFrame?: number;
+  lastFrame?: number; // End frame for graphic symbols (for limited playback range)
+  colorTransform?: ColorTransform;
+  filters?: Filter[];
+  blendMode?: BlendMode;
+  isVisible?: boolean; // Instance visibility (default true)
+  /**
+   * Component (Component Inspector) parameters set at author time, read from
+   * <persistentData><PD .../></persistentData> on the instance. Present only for
+   * component instances. Captured for tooling (author-time property validation);
+   * the renderer does not use it.
+   */
+  componentParameters?: ComponentParameter[];
+  // 3D transform properties
+  rotationX?: number; // 3D rotation around X-axis (degrees)
+  rotationY?: number; // 3D rotation around Y-axis (degrees)
+  rotationZ?: number; // 3D rotation around Z-axis (degrees) - note: 2D rotation is in matrix
+  z?: number; // Z position
+  cacheAsBitmap?: boolean; // Performance optimization hint
+}
+
+export interface VideoInstance {
+  type: 'video';
+  libraryItemName: string;
+  matrix: Matrix;
+  width: number;
+  height: number;
+}
+
+export interface BitmapInstance {
+  type: 'bitmap';
+  libraryItemName: string;
+  matrix: Matrix;
+}
+
+export interface TextInstance {
+  type: 'text';
+  /**
+   * Instance name of a dynamic/input text field — the AS identifier used to
+   * reference it (e.g. `label_tf.text`). Absent for static text. Captured for
+   * tooling; the renderer does not use it.
+   */
+  name?: string;
+  /** Which kind of text field: static (no script access), dynamic, or input. */
+  textType?: 'static' | 'dynamic' | 'input';
+  matrix: Matrix;
+  left: number;
+  width: number;
+  height: number;
+  textRuns: TextRun[];
+  filters?: Filter[];
+}
+
+export interface TextRun {
+  characters: string;
+  alignment?: 'left' | 'center' | 'right' | 'justify';
+  size: number;
+  lineHeight?: number;
+  /**
+   * Leading: extra vertical space ADDED between consecutive lines, in the same
+   * point/pixel scale as `size`/`lineHeight`. Maps to XFL
+   * `<DOMTextAttrs lineSpacing="…">`. Positive widens the gap, negative tightens
+   * it (Adobe TextAttrs.lineSpacing range is -360..720). Absent/0 => no change.
+   */
+  lineSpacing?: number;
+  face?: string;
+  fillColor: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  letterSpacing?: number;
+  indent?: number; // First-line paragraph indent in twips
+  leftMargin?: number; // Left margin in twips
+  rightMargin?: number; // Right margin in twips
+  url?: string; // Hyperlink URL
+  target?: string; // Link target (_blank, _self, etc.)
+  characterPosition?: 'normal' | 'subscript' | 'superscript';
+  autoKern?: boolean; // Enable automatic kerning
+  rotation?: number; // Per-character rotation in degrees
+}
+
+export interface Shape {
+  type: 'shape';
+  matrix: Matrix;
+  fills: FillStyle[];
+  strokes: StrokeStyle[];
+  edges: Edge[];
+  /**
+   * Edge endpoints are exact (binary pre-CS5 FLA: integer ultra-twips), so the
+   * renderer must stitch fill contours with exact vertex matching instead of
+   * the 8px gap tolerance used for XFL. With the tolerance, tiny separate
+   * fill islands (e.g. crust specks) get chained into one bogus polygon.
+   */
+  exactEdges?: boolean;
+}
+
+export interface Matrix {
+  a: number;  // scale x
+  b: number;  // skew y
+  c: number;  // skew x
+  d: number;  // scale y
+  tx: number; // translate x
+  ty: number; // translate y
+}
+
+export interface ColorTransform {
+  alphaMultiplier?: number;
+  redMultiplier?: number;
+  greenMultiplier?: number;
+  blueMultiplier?: number;
+  alphaOffset?: number;
+  redOffset?: number;
+  greenOffset?: number;
+  blueOffset?: number;
+}
+
+export interface FillStyle {
+  index: number;
+  type: 'solid' | 'linear' | 'radial' | 'bitmap';
+  color?: string;
+  alpha?: number;
+  gradient?: GradientEntry[];
+  matrix?: Matrix;
+  bitmapPath?: string; // Reference to bitmap in library (for bitmap fills)
+  spreadMethod?: 'pad' | 'reflect' | 'repeat'; // Gradient spread mode (default: pad)
+  interpolationMethod?: 'rgb' | 'linearRGB'; // Color interpolation mode (default: rgb)
+  focalPointRatio?: number; // Off-center focal point for radial gradients (-1 to 1)
+  bitmapIsClipped?: boolean; // For bitmap fills: clip instead of repeat
+  bitmapIsSmoothed?: boolean; // For bitmap fills: enable/disable smoothing (default: true)
+}
+
+export interface GradientEntry {
+  color: string;
+  alpha: number;
+  ratio: number;
+}
+
+export interface StrokeStyle {
+  index: number;
+  type: 'solid' | 'linear' | 'radial' | 'bitmap'; // Stroke fill type
+  color?: string; // For solid strokes
+  weight: number;
+  caps?: 'none' | 'round' | 'square';
+  joints?: 'miter' | 'round' | 'bevel';
+  miterLimit?: number; // Maximum miter length (default: 3 in Flash)
+  scaleMode?: 'normal' | 'horizontal' | 'vertical' | 'none'; // Stroke scaling behavior
+  pixelHinting?: boolean; // Snap stroke to pixel boundaries
+  // Dashed stroke pattern: [dashLength, gapLength] in user-space units (same scale as weight/lineWidth).
+  // Present only for <DashedStroke>; absent means a continuous (solid) line.
+  dash?: number[];
+  // Gradient properties (for linear/radial strokes)
+  gradient?: GradientEntry[];
+  matrix?: Matrix;
+  spreadMethod?: 'pad' | 'reflect' | 'repeat';
+  interpolationMethod?: 'rgb' | 'linearRGB';
+  focalPointRatio?: number; // For radial gradients
+  // Bitmap properties (for bitmap strokes)
+  bitmapPath?: string;
+  bitmapIsClipped?: boolean;
+  bitmapIsSmoothed?: boolean;
+  // Variable-width profile (<SolidStroke><VariablePointWidth><WidthMarker>), sorted by
+  // position. Absent for a constant-width stroke. Drawn as a filled outline
+  // (src/variable-width-stroke.ts).
+  widthMarkers?: WidthMarker[];
+}
+
+/**
+ * One point of a variable-width stroke profile (Animate CC Width tool / width profiles).
+ * `position` runs 0..1 along the length of each stroked path; `left`/`right` are the
+ * half-widths on either side as fractions of the stroke weight (0.5 + 0.5 = the full
+ * weight). `corner` is `type="corner"`: the width may change slope there.
+ */
+export interface WidthMarker {
+  position: number;
+  left: number;
+  right: number;
+  corner?: boolean;
+}
+
+export interface Edge {
+  fillStyle0?: number;
+  fillStyle1?: number;
+  strokeStyle?: number;
+  commands: PathCommand[];
+}
+
+export type PathCommand =
+  | { type: 'M'; x: number; y: number }
+  | { type: 'L'; x: number; y: number }
+  | { type: 'Q'; cx: number; cy: number; x: number; y: number }
+  | { type: 'C'; c1x: number; c1y: number; c2x: number; c2y: number; x: number; y: number }
+  | { type: 'Z' }; // Close path
+
+export interface Symbol {
+  name: string;
+  itemID: string;
+  symbolType: 'graphic' | 'movieclip' | 'button';
+  timeline: Timeline;
+  scale9Grid?: Rectangle; // 9-slice scaling grid
+  // Button-specific: frame index containing the hit area (typically frame 4)
+  // The hit area defines the clickable region and is never rendered
+  hitAreaFrame?: number;
+  // ActionScript linkage (Properties panel > "Export for ActionScript"). Read
+  // from <DOMSymbolItem>. Captured for tooling (resolving instances to their AS
+  // class); the renderer does not use these.
+  linkageExportForAS?: boolean; // linkageExportForAS="true"
+  linkageClassName?: string; // AS class path, e.g. "skyui.components.ItemCard"
+  linkageIdentifier?: string; // export id used by attachMovie("ItemCard", ...)
+  linkageBaseClass?: string; // declared base class, when present
+}
+
+export interface Rectangle {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+// Player state
+export interface PlayerState {
+  playing: boolean;
+  currentFrame: number;      // Current frame within current scene (0-based)
+  totalFrames: number;       // Total frames in current scene
+  fps: number;
+  // Scene information
+  currentScene: number;      // Current scene index (0-based)
+  totalScenes: number;       // Total number of scenes
+  sceneName: string;         // Name of current scene
+  globalFrame: number;       // Frame index across all scenes (for scrubbing)
+  globalTotalFrames: number; // Total frames across all scenes
+}
+
+// MovieClip instance state for independent playback
+export interface MovieClipInstanceState {
+  playhead: number;        // Current frame within the MovieClip's timeline
+  totalFrames: number;     // Total frames in this MovieClip
+  startParentFrame: number; // Parent frame where the instance's run of keyframes starts
+  isPlaying: boolean;      // Whether this instance is currently playing
+  elapsed: number;         // Ticks since the instance appeared (including held ticks)
+  stopFrames?: ReadonlySet<number>; // Frames whose script calls stop(); the playhead holds there
+}
+
+// Filters
+export interface BlurFilter {
+  type: 'blur';
+  blurX: number;
+  blurY: number;
+  quality?: number; // 1-3, defaults to 1
+}
+
+export interface GlowFilter {
+  type: 'glow';
+  blurX: number;
+  blurY: number;
+  color: string;
+  strength: number; // ratio, 1 = 100% (XFL `strength`, SWF FIXED8)
+  alpha?: number;
+  inner?: boolean;
+  knockout?: boolean;
+  quality?: number;
+}
+
+export interface DropShadowFilter {
+  type: 'dropShadow';
+  blurX: number;
+  blurY: number;
+  color: string;
+  strength: number; // ratio, 1 = 100% (XFL `strength`, SWF FIXED8)
+  alpha?: number;
+  distance: number;
+  angle: number; // in degrees
+  inner?: boolean;
+  knockout?: boolean;
+  hideObject?: boolean;
+  quality?: number;
+}
+
+export interface BevelFilter {
+  type: 'bevel';
+  blurX: number;
+  blurY: number;
+  strength: number; // ratio, 1 = 100% (XFL `strength`, SWF FIXED8)
+  highlightColor: string;
+  highlightAlpha?: number;
+  shadowColor: string;
+  shadowAlpha?: number;
+  distance: number;
+  angle: number; // in degrees
+  inner?: boolean;
+  knockout?: boolean;
+  quality?: number;
+  bevelType?: 'inner' | 'outer' | 'full'; // XFL: type attribute
+}
+
+export interface ColorMatrixFilter {
+  type: 'colorMatrix';
+  // 4x5 matrix stored as 20 values in row-major order
+  // [r0, r1, r2, r3, r4, g0, g1, g2, g3, g4, b0, b1, b2, b3, b4, a0, a1, a2, a3, a4]
+  // Each row: [R, G, B, A, offset] where output = input * matrix
+  matrix: number[];
+}
+
+export interface ConvolutionFilter {
+  type: 'convolution';
+  matrixX: number; // Width of matrix
+  matrixY: number; // Height of matrix
+  matrix: number[]; // Kernel values (matrixX * matrixY elements)
+  divisor: number; // Divide result by this value
+  bias: number; // Add this to result after division
+  preserveAlpha?: boolean; // Don't apply to alpha channel
+  clamp?: boolean; // Clamp output to 0-255
+  color?: string; // Default color for out-of-bounds pixels
+  alpha?: number; // Default alpha for out-of-bounds pixels
+}
+
+export interface GradientGlowFilter {
+  type: 'gradientGlow';
+  blurX: number;
+  blurY: number;
+  strength: number;
+  distance: number;
+  angle: number;
+  colors: GradientFilterEntry[];
+  inner?: boolean;
+  knockout?: boolean;
+  quality?: number;
+}
+
+export interface GradientBevelFilter {
+  type: 'gradientBevel';
+  blurX: number;
+  blurY: number;
+  strength: number;
+  distance: number;
+  angle: number;
+  colors: GradientFilterEntry[];
+  inner?: boolean;
+  knockout?: boolean;
+  quality?: number;
+}
+
+export interface GradientFilterEntry {
+  color: string;
+  alpha: number;
+  ratio: number; // 0-255 position in gradient
+}
+
+// `enabled: false` is a filter switched off in the Filters panel: kept in the
+// list (object tween filter curves pair by position) but not drawn.
+export type Filter = (BlurFilter | GlowFilter | DropShadowFilter | BevelFilter | ColorMatrixFilter | ConvolutionFilter | GradientGlowFilter | GradientBevelFilter) & { enabled?: false };
+
+// Shape Tweens (MorphShape)
+export interface MorphCurve {
+  controlPointA: Point;
+  anchorPointA: Point;
+  controlPointB: Point;
+  anchorPointB: Point;
+  isLine: boolean;
+}
+
+export interface MorphSegment {
+  startPointA: Point;
+  startPointB: Point;
+  fillIndex1?: number;
+  fillIndex2?: number;
+  strokeIndex1?: number;
+  strokeIndex2?: number;
+  curves: MorphCurve[];
+}
+
+export interface MorphShape {
+  segments: MorphSegment[];
+}

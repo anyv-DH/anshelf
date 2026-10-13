@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. -->
+<ExtensionManifest Version="7.0" ExtensionBundleId="com.anshelf.receiver" ExtensionBundleVersion="0.3.2" ExtensionBundleName="安安素材管理器">
+  <ExtensionList>
+    <Extension Id="com.anshelf.receiver.panel" Version="0.3.2" />
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList><Host Name="FLPR" Version="[23.0,24.9]" /></HostList>
+    <LocaleList><Locale Code="All" /></LocaleList>
+    <RequiredRuntimeList><RequiredRuntime Name="CSXS" Version="11.0" /></RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.anshelf.receiver.panel">
+      <DispatchInfo>
+        <Resources><MainPath>./index.html</MainPath><CEFCommandLine><Parameter>--enable-nodejs</Parameter><Parameter>--mixed-context</Parameter></CEFCommandLine></Resources>
+        <Lifecycle><AutoVisible>true</AutoVisible></Lifecycle>
+        <UI><Type>Panel</Type><Menu>安安素材管理器</Menu><Geometry><Size><Height>48</Height><Width>48</Width></Size><MinSize><Height>40</Height><Width>40</Width></MinSize></Geometry><Icons><Icon Type="Normal">./icon.png</Icon><Icon Type="RollOver">./icon.png</Icon><Icon Type="DarkNormal">./icon.png</Icon><Icon Type="DarkRollOver">./icon.png</Icon></Icons></UI>
+    </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>

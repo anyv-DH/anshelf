@@ -145,17 +145,6 @@ UI 与导入验收脚本见 `scripts/`，测试说明见 [TEST_PLAN.md](TEST_PLA
 
 感谢每一份鼓励，让这个小工具可以继续成长。
 
-<div align="center">
-  <table>
-    <tr>
-      <td align="center">
-        <img src="docs/images/donate-alipay.jpg" alt="支付宝打赏二维码" width="320" />
-        <br />支付宝
-      </td>
-      <td align="center">
-        <img src="docs/images/donate-wechat.jpg" alt="微信支付打赏二维码" width="320" />
-        <br />微信支付
-      </td>
-    </tr>
-  </table>
-</div>
+| 支付宝 | 微信支付 |
+| --- | --- |
+| ![支付宝打赏二维码](docs/images/donate-alipay.jpg) | ![微信支付打赏二维码](docs/images/donate-wechat.jpg) |

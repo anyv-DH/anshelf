@@ -86,15 +86,15 @@
 
 ## 快速开始
 ### 安装版（推荐）
-1. 打开 [最新版发布页](https://github.com/anyv-DH/anshelf/releases/latest)，下载 `安安素材管理器 Setup 0.3.2.exe`。
+1. 打开 [最新版发布页](https://github.com/anyv-DH/anshelf/releases/latest)，下载 `AnAn-AssetManager-Setup-0.3.2.exe`。
 2. 双击安装包，选择安装位置并完成安装；安装程序会创建桌面快捷方式。
 3. 从桌面快捷方式启动软件。卸载软件不会主动删除 `%APPDATA%\\AnShelf` 素材库。
 
 ### 便携版
-下载 `安安素材管理器 0.3.2.exe` 后直接双击即可运行，不需要安装 Node.js，也不需要管理员权限。建议把它和同目录的说明文件一起保存；移动程序不会移动素材库。
+下载 `AnAn-AssetManager-Portable-0.3.2.exe` 后直接双击即可运行，不需要安装 Node.js，也不需要管理员权限。建议把它和同目录的说明文件一起保存；移动程序不会移动素材库。
 
 ### 第一次连接 Animate
-下载发布页中的 `安安素材管理器-AnimatePlugin.zip`，完整解压后，进入目录运行 `install.ps1`。安装面板后重启 Animate，在「窗口 > 扩展 > 安安素材管理器」打开面板，再按“粘贴到舞台”即可。详细步骤见插件目录的 `README.md`。
+下载发布页中的 `AnAn-AssetManager-AnimatePlugin.zip`，完整解压后，进入目录运行 `install.ps1`。安装面板后重启 Animate，在「窗口 > 扩展 > 安安素材管理器」打开面板，再按“粘贴到舞台”即可。详细步骤见插件目录的 `README.md`。
 
 ### 开始使用
 1. 选择「普通素材」「特效素材」或「音频」，再选择文件或文件夹。
@@ -162,3 +162,4 @@ UI 与导入验收脚本见 `scripts/`，测试说明见 [TEST_PLAN.md](TEST_PLA
     <td><img src="docs/images/donate-wechat-small.jpg" alt="打赏二维码" width="260"></td>
   </tr>
 </table>
+

@@ -117,6 +117,74 @@ test('multi-asset categories update immediately and undo survives reopening', as
   assert.ok((await Library.open(root)).snapshot().assets.every((a) => a.categoryId === null));
 });
 
+test('an asset can retain its primary category and join another category without duplicating bytes', async t => {
+  const { sources, root, library } = await fixture(t);
+  const source = path.join(sources, 'shared-character.fla');
+  await fs.writeFile(source, 'shared-character');
+  const asset = (await library.importPaths([source])).assets[0];
+  const first = await library.createCategory('剧集一');
+  const second = await library.createCategory('剧集二');
+  await library.assignCategory([asset.id], first.id);
+  await library.addToCategory([asset.id], second.id);
+  const assigned = library.getAsset(asset.id);
+  assert.equal(assigned.categoryId, first.id);
+  assert.deepEqual(new Set(assigned.categoryIds), new Set([first.id, second.id]));
+  assert.deepEqual(filterAssets([assigned], { categoryId: second.id, categories: library.snapshot().categories }).map(item => item.id), [asset.id]);
+  assert.equal(library.snapshot().assets.length, 1);
+  const reopened = await Library.open(root);
+  assert.deepEqual(new Set(reopened.getAsset(asset.id).categoryIds), new Set([first.id, second.id]));
+  await reopened.undo();
+  assert.deepEqual(reopened.getAsset(asset.id).categoryIds, [first.id]);
+  await reopened.addToCategory([asset.id], second.id);
+  await reopened.deleteCategory(first.id);
+  assert.equal(reopened.getAsset(asset.id).categoryId, second.id);
+  assert.deepEqual(reopened.getAsset(asset.id).categoryIds, [second.id]);
+});
+
+test('shared assignments validate batches, remove a single link, deduplicate additions and preserve preview data on undo', async t => {
+  const { sources, root, library } = await fixture(t);
+  const source = path.join(sources, 'shared.fla'); await fs.writeFile(source, 'shared');
+  const asset = (await library.importPaths([source])).assets[0];
+  const first = await library.createCategory('甲', null, 'ordinary');
+  const second = await library.createCategory('乙', null, 'ordinary');
+  const audio = await library.createCategory('音乐', null, 'audio');
+  await library.assignCategory([asset.id], first.id);
+  await assert.rejects(library.addToCategory([asset.id, 'missing'], second.id), /素材不存在/);
+  await assert.rejects(library.addToCategory([asset.id], audio.id), /类型/);
+  assert.deepEqual(library.getAsset(asset.id).categoryIds, [first.id]);
+  await library.addToCategory([asset.id, asset.id], second.id);
+  const revision = library.revision; await library.addToCategory([asset.id], second.id);
+  assert.equal(library.revision, revision);
+  await library.setPreview(asset.id, { previewStatus: 'ready', previewPath: 'previews/shared.png' });
+  await library.removeFromCategory([asset.id], first.id);
+  assert.equal(library.getAsset(asset.id).categoryId, second.id);
+  await library.undo(); assert.deepEqual(library.getAsset(asset.id).categoryIds, [first.id, second.id]);
+  assert.equal(library.getAsset(asset.id).previewStatus, 'ready');
+  await library.importPaths([source]); assert.deepEqual(library.getAsset(asset.id).categoryIds, [first.id, second.id]);
+  await library.importPaths([source], { categoryId: second.id }); assert.deepEqual(library.getAsset(asset.id).categoryIds, [second.id]);
+  await library.assignCategory([asset.id], null); assert.deepEqual((await Library.open(root)).getAsset(asset.id).categoryIds, []);
+  assert.equal(await fs.readFile(source, 'utf8'), 'shared');
+});
+
+test('legacy single-category records and undo remain compatible with multiple assignments', async t => {
+  const { sources, root, library } = await fixture(t);
+  const source = path.join(sources, 'legacy.fla'); await fs.writeFile(source, 'legacy');
+  const asset = (await library.importPaths([source])).assets[0];
+  const first = await library.createCategory('旧分类'); await library.assignCategory([asset.id], first.id);
+  const second = await library.createCategory('旧分类二'); await library.assignCategory([asset.id], second.id);
+  const file = path.join(root, 'library.json'); const legacy = JSON.parse(await fs.readFile(file, 'utf8'));
+  for (const item of legacy.assets) delete item.categoryIds;
+  for (const entry of legacy.history) for (const change of entry) {
+    if (change.previous) delete change.previous.categoryIds;
+    if (change.before) delete change.before.categoryIds;
+    if (change.after) delete change.after.categoryIds;
+  }
+  await fs.writeFile(file, JSON.stringify(legacy));
+  const reopened = await Library.open(root); assert.deepEqual(reopened.getAsset(asset.id).categoryIds, [second.id]);
+  await reopened.undo(); assert.deepEqual(reopened.getAsset(asset.id).categoryIds, [first.id]);
+  assert.deepEqual((await Library.open(root)).getAsset(asset.id).categoryIds, [first.id]);
+});
+
 test('category edits and removal preserve files and are reversible', async (t) => {
   const { sources, library } = await fixture(t);
   const source = path.join(sources, 'a.fla');

@@ -67,7 +67,7 @@ test('opening an asset in Animate uses a separate editable copy and rejects inva
   const asset = host.library.snapshot().assets[0];
   assert.equal(await host.api.openInAnimate(asset.id), true);
   assert.notEqual(opened[0], host.library.assetPath(asset.id));
-  assert.equal(path.dirname(opened[0]), path.join(host.root, 'opened'));
+  assert.equal(path.dirname(path.dirname(opened[0])), path.join(host.root, 'opened'));
   assert.equal(path.extname(opened[0]), '.fla');
   assert.equal(await fs.readFile(opened[0], 'utf8'), 'original-data');
   assert.notEqual(opened[0], source);
@@ -85,6 +85,73 @@ test('opening an asset in Animate uses a separate editable copy and rejects inva
   record.managedPath = 'assets/link/original.fla';
   await assert.rejects(host.api.openInAnimate(asset.id), /链接|路径/);
   assert.equal(opened.length, 1);
+});
+
+test('opening an asset in Animate keeps a safe meaningful basename while isolating concurrent copies', async t => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-open-name-'));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const source = path.join(base, '都市人物_女主角.fla');
+  await fs.writeFile(source, 'original-data');
+  const opened = [];
+  const host = await createHost({ root: path.join(base, 'library'), render: async () => ({ previewPath: null }), openInAnimate: async file => { opened.push(file); return true; } });
+  await host.api.importPaths([source]);
+  const asset = host.library.snapshot().assets[0];
+  await Promise.all([host.api.openInAnimate(asset.id), host.api.openInAnimate(asset.id)]);
+  assert.equal(opened.length, 2);
+  assert.match(path.basename(opened[0]), /^都市人物_女主角(?:-\d+)?\.fla$/);
+  assert.match(path.basename(opened[1]), /^都市人物_女主角(?:-\d+)?\.fla$/);
+  assert.notEqual(opened[0], opened[1]);
+  assert.equal(path.dirname(path.dirname(opened[0])), path.join(host.root, 'opened'));
+  assert.equal(path.dirname(path.dirname(opened[1])), path.join(host.root, 'opened'));
+  assert.equal(await fs.readFile(source, 'utf8'), 'original-data');
+  assert.equal(await fs.readFile(opened[0], 'utf8'), 'original-data');
+  await host.library.updateAsset(asset.id, { name: '../CON:*?' });
+  await host.api.openInAnimate(asset.id);
+  assert.ok(!/[<>:"/\\|?*]/.test(path.basename(opened[2])));
+  assert.equal(path.dirname(path.dirname(opened[2])), path.join(host.root, 'opened'));
+  await host.queue.idle();
+});
+
+test('import asks for Animate once for pending FLA previews without blocking import', async t => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-auto-animate-'));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const source = path.join(base, 'a.fla');
+  await fs.writeFile(source, 'a');
+  let starts = 0;
+  const host = await createHost({ root: path.join(base, 'library'), render: async () => ({ previewPath: null }), ensureAnimateRunning: async () => { starts++; } });
+  const result = await host.api.importPaths([source]);
+  assert.equal(result.added, 1);
+  assert.equal(starts, 1);
+  await host.api.importPaths([source], { preferExistingPreview: false });
+  assert.equal(starts, 2);
+  await host.queue.idle();
+});
+
+test('Animate startup failure does not block offline preview queue', async t => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-auto-animate-failure-'));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const source = path.join(base, 'a.fla');
+  await fs.writeFile(source, 'a');
+  const notices = [];
+  const host = await createHost({ root: path.join(base, 'library'), render: async () => ({ previewPath: null }), ensureAnimateRunning: async () => { throw new Error('AN unavailable'); }, onImportNotice: message => notices.push(message) });
+  const result = await host.api.importPaths([source]);
+  assert.equal(result.added, 1);
+  assert.equal(host.library.snapshot().assets.length, 1);
+  await host.animateIdle();
+  assert.match(notices[0], /AN unavailable/);
+  await host.queue.idle();
+});
+
+test('sidecar-only and audio imports never request Animate startup', async t => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-auto-skip-'));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const fla = path.join(base, '已有预览.fla'), audio = path.join(base, '声音.wav');
+  await fs.writeFile(fla, 'fla'); await fs.writeFile(path.join(base, '已有预览.png'), 'preview'); await fs.writeFile(audio, 'audio');
+  let starts = 0;
+  const host = await createHost({ root: path.join(base, 'library'), render: async () => ({ previewPath: null }), ensureAnimateRunning: async () => starts++ });
+  await host.api.importPaths([fla]); await host.api.importPaths([audio], { mode: 'audio' });
+  assert.equal(starts, 0); assert.equal(host.library.snapshot().assets.length, 2);
+  await host.queue.idle();
 });
 
 test('Animate saves only the opened copy while source and content-addressed bytes remain immutable', async t => {

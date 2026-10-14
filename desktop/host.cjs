@@ -10,6 +10,14 @@ const {sha256}=require('../core/files.cjs');
 const {PreviewQueue}=require('../core/preview.cjs');
 const {createSync}=require('./host-sync.cjs');
 
+function animateFilename(asset) {
+  let stem = String(asset.name || asset.originalName || '未命名素材').replace(/\.fla$/i, '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[. ]+|[. ]+$/g, '').slice(0, 150).replace(/[. ]+$/g, '');
+  if (!stem) stem = '未命名素材';
+  if (/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(stem)) stem = '_' + stem;
+  return stem + '.fla';
+}
+
 async function isOriginalFile(file,asset){
   const extensions=asset.kind==='audio'?AUDIO_EXTENSIONS:['.fla'];
   if(typeof file!=='string'||file.includes('\0')||!path.isAbsolute(file)||!extensions.includes(path.extname(file).toLowerCase()))return false;
@@ -27,9 +35,10 @@ async function isOriginalFile(file,asset){
   }catch{return false;}
 }
 
-async function createHost({root,render,validateImage=async()=>true,createPoster=async()=>false,pickFiles=async()=>[],pickFolder=async()=>[],compact=async()=>false,openPluginFolder=async()=>{},openInAnimate=async()=>{throw new Error('当前环境无法打开 Animate');},revealFile=async()=>{throw new Error('当前环境无法打开文件所在位置');},setTheme=async theme=>theme,windowAction=async()=>({maximized:false}),previewUrl=id=>`anshelf://preview/${id}`,mediaUrl=id=>`anshelf://media/${id}`,posterUrl=id=>`anshelf://poster/${id}`,demoPath=path.join(__dirname,'../demo')}){
+async function createHost({root,render,validateImage=async()=>true,createPoster=async()=>false,pickFiles=async()=>[],pickFolder=async()=>[],compact=async()=>false,openPluginFolder=async()=>{},openInAnimate=async()=>{throw new Error('当前环境无法打开 Animate');},ensureAnimateRunning=async()=>{},onImportNotice=()=>{},revealFile=async()=>{throw new Error('当前环境无法打开文件所在位置');},setTheme=async theme=>theme,windowAction=async()=>({maximized:false}),previewUrl=id=>`anshelf://preview/${id}`,mediaUrl=id=>`anshelf://media/${id}`,posterUrl=id=>`anshelf://poster/${id}`,demoPath=path.join(__dirname,'../demo')}){
   const library=await Library.open(root);const bridge=new Bridge(root);
   const queue=new PreviewQueue(library,render);
+  const animateTasks=new Set();
   const snapshot=async(status={})=>{const data=library.snapshot();return{...data,assets:data.assets.map(a=>({...a,
     mediaUrl:a.kind==='audio'?mediaUrl(a.id):null,
     previewPosterUrl:a.previewPosterPath?posterUrl(a.id)+'?v='+encodeURIComponent(a.previewRevision||a.id):null,
@@ -60,7 +69,14 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
         a.previewStatus=current.previewStatus;
       }
     }
-    queue.add((result.assets||library.snapshot().assets).filter(a=>a.kind!=='audio'&&a.previewStatus==='pending'),true);return result;
+    const pending=(result.assets||[]).map(a=>library.getAsset(a.id)).filter(a=>a&&a.kind!=='audio'&&a.previewStatus==='pending');
+    queue.add(pending,true);
+    if(pending.length) {
+      const task=Promise.resolve().then(()=>ensureAnimateRunning()).catch(error=>onImportNotice('AN 自动启动未完成：'+String(error.message||error)+'。素材已导入，仍会继续自动生成预览。')).catch(()=>{});
+      animateTasks.add(task);
+      task.then(()=>animateTasks.delete(task));
+    }
+    return result;
   }
   const api={
     snapshot:()=>snapshot(),sync,
@@ -68,6 +84,7 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     importFolder:async(options={})=>importPaths(await pickFolder(options),options),
     importPaths,
     assignCategory:async(ids,id)=>library.assignCategory(ids,id),undo:async()=>library.undo(),
+    addToCategory:async(ids,id)=>library.addToCategory(ids,id),removeFromCategory:async(ids,id)=>library.removeFromCategory(ids,id),
     createCategory:async(name,parentId=null,scope='all')=>library.createCategory(name,parentId,scope),renameCategory:async(id,name,parentId=undefined)=>library.renameCategory(id,name,parentId),deleteCategory:async(id)=>library.deleteCategory(id),
     setCategoryPinned:async(id,pinned)=>library.setCategoryPinned(id,pinned),
     updateAsset:async(id,patch)=>library.updateAsset(id,patch),removeAssets:async(ids)=>library.removeAssets(ids),
@@ -110,7 +127,11 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
       }
       const canonicalDirectory=await fs.realpath(directory),canonicalRoot=await fs.realpath(bridge.root);
       if(path.relative(canonicalRoot,canonicalDirectory)!=='opened')throw new Error('打开副本目录路径无效');
-      const file=path.join(directory,randomUUID()+'.fla');
+      const workingDirectory=path.join(directory,randomUUID());
+      await fs.mkdir(workingDirectory);
+      const stat=await fs.lstat(workingDirectory);
+      if(stat.isSymbolicLink()||!stat.isDirectory()||path.dirname(await fs.realpath(workingDirectory))!==canonicalDirectory)throw new Error('打开副本目录路径无效');
+      const file=path.join(workingDirectory,animateFilename(a));
       await fs.copyFile(source,file,fs.constants.COPYFILE_EXCL);
       return openInAnimate(resolveManagedPath(bridge.root,file,'opened'));
     },
@@ -120,6 +141,6 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     demo:async()=>importPaths([demoPath],{preferExistingPreview:true}),compact,openPluginFolder
   };
   queue.add(library.snapshot().assets.filter(a=>a.previewStatus==='pending'));
-  return{api,library,bridge,queue,root};
+  return{api,library,bridge,queue,root,animateIdle:()=>Promise.all([...animateTasks])};
 }
-module.exports={createHost};
+module.exports={createHost,animateFilename};

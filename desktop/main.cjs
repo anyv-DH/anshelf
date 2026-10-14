@@ -12,6 +12,7 @@ const {registerStageDrag,createNativeTargetProbe}=require('./stage-drag.cjs');
 const {createWindowMode}=require('./window-mode.cjs');
 const {createGifPoster}=require('./gif-poster.cjs');
 const {resolveManagedPath}=require('../core/bridge.cjs');
+const {createAnimateLauncher}=require('./animate-launcher.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'anshelf',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 let win,host;
 async function openAnimateFile(file){
@@ -32,6 +33,7 @@ app.on('second-instance',()=>{if(win){win.show();win.focus();}});
 app.whenReady().then(async()=>{
   session.defaultSession.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*']},(_request,callback)=>callback({cancel:true}));
   const root=process.env.ANSHELF_DATA_DIR||path.join(app.getPath('appData'),'AnShelf');
+  const animateLauncher=createAnimateLauncher({executable:process.env.ANSHELF_ANIMATE_EXE});
   win=new BrowserWindow({width:1480,height:940,minWidth:850,minHeight:600,frame:false,icon:path.join(__dirname,'icon.ico'),backgroundColor:'#171520',title:'安安素材管理器',autoHideMenuBar:true,webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,sandbox:true,nodeIntegration:false}});
   const windowMode=createWindowMode(win);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
@@ -41,6 +43,8 @@ app.whenReady().then(async()=>{
     pickFolder:async({mode='ordinary'}={})=>{if(!['ordinary','effect','audio'].includes(mode))throw new Error('导入模式无效');const r=await dialog.showOpenDialog(win,{title:mode==='audio'?'选择音频文件夹':mode==='effect'?'选择特效素材文件夹':'选择素材文件夹',properties:['openDirectory']});return r.canceled?[]:r.filePaths;},
     compact:async()=>windowMode.toggleCompact(),
     openInAnimate:openAnimateFile,
+    ensureAnimateRunning:()=>animateLauncher.ensureRunning(),
+    onImportNotice:message=>{if(!win.isDestroyed())win.webContents.send('shelf:import-notice',message);},
     revealFile:async file=>{shell.showItemInFolder(file);},
     setTheme:async(theme)=>{win.setBackgroundColor(theme==='warm'?'#f7f1e9':'#171520');return theme;},
     windowAction:async(action)=>windowMode.action(action),

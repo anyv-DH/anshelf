@@ -4,3 +4,4 @@ release/
 test-output/
 data/
 *.log
+_plugin_inspect/

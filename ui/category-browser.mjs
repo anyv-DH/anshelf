@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
-import { assetMode, categoryDescendantIds, categoryPath } from './model.js';
+import { assetCategoryIds, assetMode, categoryDescendantIds, categoryPath } from './model.js';
 
 const typeViews = { ordinary: 'ordinary', effects: 'effect', audio: 'audio' };
 const scopeViews = { ordinary: 'ordinary', effect: 'effects', audio: 'audio' };
@@ -33,10 +33,12 @@ export function favoriteCategoryGroups(categories, assets) {
   const groups = new Map();
   for (const asset of assets) {
     if (!asset.favorite) continue;
-    const id = asset.categoryId && byId.has(asset.categoryId) ? asset.categoryId : FAVORITE_UNCATEGORIZED;
-    const group = groups.get(id) || { id, name: id === FAVORITE_UNCATEGORIZED ? '未分类' : categoryPath(categories, id), count: 0 };
-    group.count += 1;
-    groups.set(id, group);
+    const ids = assetCategoryIds(asset).filter(id => byId.has(id));
+    for (const id of ids.length ? ids : [FAVORITE_UNCATEGORIZED]) {
+      const group = groups.get(id) || { id, name: id === FAVORITE_UNCATEGORIZED ? '未分类' : categoryPath(categories, id), count: 0 };
+      group.count += 1;
+      groups.set(id, group);
+    }
   }
   return [...groups.values()].sort((a, b) => a.id === FAVORITE_UNCATEGORIZED ? 1 : b.id === FAVORITE_UNCATEGORIZED ? -1 : a.name.localeCompare(b.name, 'zh-CN'));
 }
@@ -45,8 +47,9 @@ export function favoriteCategoryGroups(categories, assets) {
 export function favoriteCategoryMatches(categories, asset, selected) {
   if (selected === 'all') return true;
   const known = new Set(categories.map(item => item.id));
-  if (selected === FAVORITE_UNCATEGORIZED) return !asset.categoryId || !known.has(asset.categoryId);
-  return asset.categoryId === selected;
+  const ids = assetCategoryIds(asset);
+  if (selected === FAVORITE_UNCATEGORIZED) return !ids.some(id => known.has(id));
+  return ids.includes(selected);
 }
 
 /** Only the next folder level is shown; old shared folders remain discoverable by content. */
@@ -69,7 +72,7 @@ export function categoryBrowser(categories, assets, selected, typeScope = 'all')
     if (item.scope === mode) return true;
     if (item.scope && item.scope !== 'all') return false;
     const ids = categoryDescendantIds(categories, item.id);
-    return assets.some(asset => assetMode(asset) === mode && ids.has(asset.categoryId));
+    return assets.some(asset => assetMode(asset) === mode && assetCategoryIds(asset).some(id => ids.has(id)));
   });
   children.sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
   return { visible: !!(current || mode), children, path, parentId,

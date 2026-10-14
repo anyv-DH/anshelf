@@ -1,5 +1,24 @@
 # Local release checklist
 
+## 0.3.4 repair and publication gates
+
+- [x] Failing regression reproduces the UUID name and missing additive category operation; old packaged UI fails the new-action assertion.
+- [x] Full 248/248 regressions, isolated new UI 7/7, prior UI 21/21, import 8/8 and category journey 11/11 pass. Deferred process probing cannot keep completed imports busy.
+- [x] Live library is backed up; read-only new-version loading preserves all 261 records, 7 categories, 195 urban characters and old undo history.
+- [x] Native installation discovery resolves this PC's Animate.exe and correctly detects the existing process. Startup from an absent host is tested with process doubles; the user's Animate remains open.
+- [x] Packaged shared-category workflow 7/7, category journey 11/11 and portable ordinary/effect/audio destination checks 3/3 pass without page errors.
+- [x] Final source-to-ASAR audit matches 74 files, 6 demos and 11 external plugin files. Exact delivered portable passes destination checks 3/3 and startup/preview/density/theme smoke 5/5. Delivered installer/portable hashes match the build.
+- [ ] Desktop target update with the existing library preserved.
+- [ ] Push the reviewed source, tag v0.3.4 and verify GitHub release download assets.
+- GitHub publication is explicitly user-authorized on 2026-10-15. Preserve appId/AppData identity, prior packages and independent editable working copies. Exclude user assets and private recovery data from the repository.
+
+## 0.3.3 desktop artifact correction
+
+- The actual 0.3.2 desktop portable was reproduced missing `#import-category`; its ASAR differs from the current source. Historical 0.3.2 source checks do not certify that desktop artifact.
+- Rebuild as 0.3.3 and run the packaged category journey plus `scripts/portable-import-destination-e2e.cjs` against the exact delivered copy, using isolated data.
+- Verify source-to-ASAR and release-to-delivery byte equality before rewriting the shortcut. Keep appId and the user's existing library unchanged. No remote publication in this update.
+- Completed locally: 234/234 unit regressions, packaged category 11/11, packaged filter 6/6, exact delivered portable imports 3/3 with no page errors. Source-byte audit 72 files and copied EXE hashes pass. Desktop shortcut now points to 0.3.3; previous shortcut is backed up.
+
 ## 0.3.2 release gates
 
 - [x] Package version, desktop shortcut and all displayed filenames are 0.3.2.

@@ -1,5 +1,13 @@
 # Architecture
 
+## 0.3.4 contracts
+
+Version-one records retain `categoryId` as the primary category and gain ordered unique `categoryIds`. Reading old records derives their membership in memory without rewriting the index. `assignCategory` and explicit import destinations replace memberships; `addToCategory` preserves them and validates the destination scope. `removeFromCategory` and category deletion remove only that link, promoting the next surviving category when necessary. Atomic history stores both fields; legacy undo entries mentioning only `categoryId` restore the matching single membership. Whole-library counts, category browsing, favorite groups and child-folder hiding match all memberships, while cards and the complete asset count remain unique.
+
+AN-open working copies use `opened/<unique directory>/<safe material name>.fla`. The directory is validated inside the canonical library root; COPYFILE_EXCL and a fresh directory isolate simultaneous opens and saved user work. Names retain Unicode, with Windows reserved characters/names and trailing dots normalized.
+
+`animate-launcher` probes processes only during a pending-preview import. It discovers the executable through a validated environment override, the local FLA association/App Paths registry values, and standard Adobe installation folders. Registry commands are parsed as data; startup uses an absolute Animate.exe path, no shell, and no document argument. Concurrent requests share one promise, and a 20-second startup grace prevents repeat spawns. It does not watch processes at idle. Offline preview workers and import IPC completion run independently from startup. Errors reach the fixed `shelf:import-notice` event; they never roll back successful imports or keep the interface busy while probing processes.
+
 ## 0.3.2 contracts
 
 The compact CEP panel uses a 48×48 default content viewport (40×40 minimum) and a single stateful action button. CSS switches from the button icon to readable status text as width permits; this does not assume that Animate will honor a requested outer window size. Desktop window mode owns the always-on-top lifecycle: mini mode records/restores bounds, while blur, maximize, fullscreen, and minimize immediately remove topmost state.
@@ -41,7 +49,7 @@ Original FLA paths are never modified or moved. Metadata stores managed relative
 
 Product name is 安安素材管理器; appId and AppData/AnShelf remain stable. Version-1 JSON categories gain optional parentId, normalized to null for roots. Likes store likedAt and derive their visible 24-hour state at read time. Tree validation lives in core; UI mirrors descendant filtering. Theme preference is localStorage, with native background updates via fixed IPC. Frameless titlebar uses three allowlisted window actions. Opening AN resolves known asset IDs to managed FLAs, never renderer-supplied paths/executables. Inspector, classification tools and transfer details are conditional; preview zoom is modal.
 
-Opening validates the content-addressed source then copies it to root/opened/UUID.fla, retaining the editable working copy. User saves never mutate the hash library. Insertion uses the exact current playhead on the existing target layer: a hold frame becomes a normal keyframe, inheriting content, then complete source root is appended and visually centered. No blank target keyframe or new target layer.
+Opening validates the content-addressed source then copies it to root/opened/UUID/material-name.fla, retaining the editable working copy. User saves never mutate the hash library. Insertion uses the exact current playhead on the existing target layer: a hold frame becomes a normal keyframe, inheriting content, then complete source root is appended and visually centered. No blank target keyframe or new target layer.
 
 Grid density is a local UI preference (automatic or 4/5/6 columns). The available content width limits the effective columns so narrow windows and the inspector cannot force card actions outside their bounds. Compact headings bring the first row upwards. The revealInFolder IPC takes an asset ID, resolves an existing absolute source FLA from library metadata, and falls back to a validated managed copy. The renderer never supplies the destination path; Explorer selection is the only side effect.
 

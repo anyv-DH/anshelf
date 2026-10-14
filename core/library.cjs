@@ -13,6 +13,21 @@ const EDITABLE_FIELDS = new Set(['name', 'tags', 'favorite', 'categoryId', 'like
 const PREVIEW_FIELDS = new Set(['previewPath', 'previewPosterPath', 'previewStatus', 'previewError', 'width', 'height', 'frames', 'frameRate', 'scene', 'frame', 'previewOrigin', 'previewFormat', 'previewAnimated', 'previewFrameCount', 'previewDurationMs', 'previewWarning']);
 const clone = (value) => structuredClone(value);
 
+function assetCategoryIds(asset) {
+  return [...new Set([asset.categoryId, ...(asset.categoryIds || [])].filter(Boolean))];
+}
+
+function setAssetCategories(asset, ids) {
+  asset.categoryIds = [...new Set(ids)];
+  asset.categoryId = asset.categoryIds[0] || null;
+}
+
+function checkAssetCategory(state, asset, id) {
+  checkCategory(state, id);
+  const target = state.categories.find(item => item.id === id);
+  if (target && target.scope !== 'all' && target.scope !== (asset.assetType || 'ordinary')) throw new Error('素材类型与分类类型不匹配');
+}
+
 function isLiked(asset, now = Date.now()) {
   const likedAt = typeof asset?.likedAt === 'string' ? Date.parse(asset.likedAt) : NaN;
   return Number.isFinite(likedAt) && likedAt <= now && now - likedAt < LIKE_DURATION_MS;
@@ -64,7 +79,9 @@ function categoryDescendantIds(categories, id) {
 function normalizeState(state) {
   normalizeCategoryScopes(state.categories);
   for (const category of state.categories) { category.parentId ??= null; category.pinned ??= false; }
+  const knownCategories = new Set(state.categories.map(category => category.id));
   for (const asset of state.assets) {
+    setAssetCategories(asset, assetCategoryIds(asset).filter(id => knownCategories.has(id)));
     asset.likedAt ??= null; asset.kind ??= 'fla'; asset.assetType ??= 'ordinary';
     asset.extension ??= '.fla'; asset.previewAnimated ??= false;
     asset.previewResolution = normalizePreviewResolution(asset.previewResolution);
@@ -115,6 +132,7 @@ function validateState(state, root) {
     if (asset.kind != null && !['fla', 'audio'].includes(asset.kind)) throw new Error('无效的素材类型');
     if (asset.assetType != null && !['ordinary', 'effect', 'audio'].includes(asset.assetType)) throw new Error('无效的素材导入类型');
     if (asset.kind === 'audio' && (!AUDIO_EXTENSIONS.includes(asset.extension) || asset.assetType !== 'audio')) throw new Error('无效的音频素材记录');
+    if (asset.categoryIds != null && (!Array.isArray(asset.categoryIds) || asset.categoryIds.some(id => typeof id !== 'string' || !id))) throw new Error('素材分类列表无效');
     normalizePreviewResolution(asset.previewResolution);
   }
   const ids = new Set();
@@ -239,7 +257,7 @@ class Library {
             asset = { id: randomUUID(), hash, name: path.parse(source).name, originalName,
               kind, assetType: mode, extension: path.extname(source).toLowerCase(), previewResolution: kind === 'fla' ? resolution : null,
               sourcePaths: [], managedPath: `assets/${hash}${path.extname(source).toLowerCase()}`, previewPath: null,
-              previewStatus: kind === 'audio' ? 'none' : 'pending', previewError: null, categoryId: categoryId ?? null, tags: [], favorite: false, likedAt: null,
+              previewStatus: kind === 'audio' ? 'none' : 'pending', previewError: null, categoryId: categoryId ?? null, categoryIds: categoryId ? [categoryId] : [], tags: [], favorite: false, likedAt: null,
               createdAt: new Date().toISOString(), width: null, height: null, frames: null, previewOrigin: null, previewFormat: null };
             await fs.rename(temporary, insidePath(this.root, asset.managedPath));
           }
@@ -267,7 +285,7 @@ class Library {
           if (!asset.sourcePaths.includes(source)) asset.sourcePaths.push(source);
           // Assign only successfully imported assets. An omitted destination
           // preserves the classification of an existing duplicate.
-          if (categoryId !== undefined) asset.categoryId = categoryId;
+          if (categoryId !== undefined) setAssetCategories(asset, categoryId ? [categoryId] : []);
           if (isNew) {
             state.assets.push(asset);
             result.added++;
@@ -288,7 +306,28 @@ class Library {
       checkCategory(state, id);
       if (!Array.isArray(ids)) throw new Error('请提供素材 ID 列表');
       const assets = [...new Set(ids)].map((assetId) => findAsset(state, assetId));
-      for (const asset of assets) asset.categoryId = id;
+      for (const asset of assets) setAssetCategories(asset, id ? [id] : []);
+      return assets;
+    });
+  }
+
+  addToCategory(ids, id) {
+    return this.change(state => {
+      if (!id) throw new Error('请选择要加入的分类');
+      checkCategory(state, id);
+      if (!Array.isArray(ids)) throw new Error('请提供素材 ID 列表');
+      const assets = [...new Set(ids)].map(assetId => findAsset(state, assetId));
+      for (const asset of assets) { checkAssetCategory(state, asset, id); setAssetCategories(asset, [...assetCategoryIds(asset), id]); }
+      return assets;
+    });
+  }
+
+  removeFromCategory(ids, id) {
+    return this.change(state => {
+      checkCategory(state, id);
+      if (!Array.isArray(ids)) throw new Error('请提供素材 ID 列表');
+      const assets = [...new Set(ids)].map(assetId => findAsset(state, assetId));
+      for (const asset of assets) setAssetCategories(asset, assetCategoryIds(asset).filter(value => value !== id));
       return assets;
     });
   }
@@ -353,7 +392,7 @@ class Library {
         occupiedNames.add(name);
       }
       state.categories = state.categories.filter((category) => category.id !== id);
-      for (const asset of state.assets) if (asset.categoryId === id) asset.categoryId = null;
+      for (const asset of state.assets) if (assetCategoryIds(asset).includes(id)) setAssetCategories(asset, assetCategoryIds(asset).filter(value => value !== id));
       return true;
     });
   }
@@ -380,7 +419,7 @@ class Library {
       }
       if ('categoryId' in patch) {
         checkCategory(state, patch.categoryId);
-        asset.categoryId = patch.categoryId;
+        setAssetCategories(asset, patch.categoryId ? [patch.categoryId] : []);
       }
       return assetSnapshot(asset);
     });
@@ -437,7 +476,11 @@ class Library {
         const items = state[change.collection];
         const index = items.findIndex((item) => item.id === change.id);
         if (change.previous) {
-          if (index >= 0) Object.assign(items[index], change.previous);
+          if (index >= 0) {
+            Object.assign(items[index], change.previous);
+            // Version-one undo records knew only the primary assignment.
+            if (change.collection === 'assets' && Object.hasOwn(change.previous, 'categoryId') && !Object.hasOwn(change.previous, 'categoryIds')) setAssetCategories(items[index], change.previous.categoryId ? [change.previous.categoryId] : []);
+          }
         } else if (change.before === null) {
           if (index >= 0) items.splice(index, 1);
         } else {
@@ -457,7 +500,7 @@ function filterAssets(assets, { query = '', categoryId, categories, favorites = 
   const filtered = assets.filter((asset) => {
     const haystack = `${asset.name} ${(asset.tags ?? []).join(' ')}`.toLocaleLowerCase();
     const categoryMatches = categoryId === undefined || categoryId === null || categoryId === 'all'
-      || (['uncategorized', '__uncategorized__'].includes(categoryId) ? asset.categoryId === null : categoryIds.has(asset.categoryId));
+      || (['uncategorized', '__uncategorized__'].includes(categoryId) ? assetCategoryIds(asset).length === 0 : assetCategoryIds(asset).some(id => categoryIds.has(id)));
     return categoryMatches && (!favorites || asset.favorite) && (!likes || isLiked(asset, now)) && words.every((word) => haystack.includes(word));
   });
   const dateOrder = (a, b) => String(b.createdAt).localeCompare(String(a.createdAt));
@@ -469,4 +512,4 @@ function filterAssets(assets, { query = '', categoryId, categories, favorites = 
   return filtered;
 }
 
-module.exports = { Library, filterAssets, findSidecar, categoryDescendantIds, isLiked, LIKE_DURATION_MS, AUDIO_EXTENSIONS, normalizePreviewResolution, PREVIEW_RESOLUTIONS };
+module.exports = { Library, filterAssets, findSidecar, categoryDescendantIds, assetCategoryIds, isLiked, LIKE_DURATION_MS, AUDIO_EXTENSIONS, normalizePreviewResolution, PREVIEW_RESOLUTIONS };

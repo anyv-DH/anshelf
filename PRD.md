@@ -1,7 +1,12 @@
 # 安安素材管理器 — 产品与验收
 2026-10-13，Windows 本地单用户应用。用户授权规划、实现、本地测试及打包。实际宿主为 Animate 2023 23.0.0.407 / CEP 11.5.3；清单同时支持 2024，后者待实测。
 
+2026-10-15：用户明确授权完成修复后自动提交、推送并发布新版到现有 GitHub 仓库 `anyv-DH/anshelf`，随后更新桌面快捷方式。素材库和备份不进入公开仓库。
+
 ## Core requirements
+- 0.3.4：“用 AN 打开”创建独立工作目录，文件仍用素材名称，例如“都市人物_女主角.fla”；同名素材、重复或并发打开各自隔离，不覆盖先前工作副本。
+- 0.3.4：选中素材后，“选择分类”替换原分类；“加入其他分类”保留已有分类，把同一素材加入其他兼容文件夹。多个分类共享一个素材和预览，计数/搜索/收藏/子文件夹过滤识别全部归属；详情中点击分类 × 只取消该分类，支持撤销和重开。
+- 0.3.4：导入 FLA 后若需要自动预览，检查并启动已安装的 Animate；已有 AN 进程时不重复启动。同名预览可用和音频导入不启动 AN。启动失败明确提示，离线预览和成功导入继续完成，不把素材交给 AN 文件导入器。
 - Import .fla files and folders, preserve originals, deduplicate identical bytes, and retain source paths.
 - Import dialog has “优先使用同名预览图” enabled by default. Matching same-stem PNG/JPG/JPEG/WebP is reused; otherwise previews are automatically generated and cached. Disable to force regeneration. Failed previews can retry.
 - Categories, favorites, tags, search, multi-select, instant category assignment and undo. Categories are metadata; originals are never moved.

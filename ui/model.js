@@ -19,6 +19,10 @@ export function categoryCount(assets, category, categories = [], typeScope = 'al
   return assets.filter(asset => (typeScope === 'all' || assetMode(asset) === typeScope) && matchesCategory(asset, category, ids)).length;
 }
 
+export function assetCategoryIds(asset) {
+  return [...new Set([asset?.categoryId, ...(asset?.categoryIds || [])].filter(Boolean))];
+}
+
 function matchesCategory(asset, category, categoryIds) {
   if (category === 'all') return true;
   if (category === 'ordinary') return assetMode(asset) === 'ordinary';
@@ -26,8 +30,8 @@ function matchesCategory(asset, category, categoryIds) {
   if (category === 'audio') return assetMode(asset) === 'audio';
   if (category === 'favorites') return !!asset.favorite;
   if (category === 'liked') return isLiked(asset);
-  if (category === 'uncategorized') return !asset.categoryId;
-  return categoryIds ? categoryIds.has(asset.categoryId) : asset.categoryId === category;
+  if (category === 'uncategorized') return assetCategoryIds(asset).length === 0;
+  return assetCategoryIds(asset).some(id => categoryIds ? categoryIds.has(id) : id === category);
 }
 
 /**
@@ -39,11 +43,11 @@ function matchesCategory(asset, category, categoryIds) {
  * folder context.
  */
 function isChildCategoryAsset(asset, category, categories, categoryIds) {
-  if (!asset?.categoryId || !Array.isArray(categories) || !categories.length) return false;
+  const memberships = assetCategoryIds(asset);
+  if (!memberships.length || !Array.isArray(categories) || !categories.length) return false;
   const typedRoot = { ordinary: 'ordinary', effects: 'effect', audio: 'audio' }[category];
-  if (typedRoot) return assetMode(asset) === typedRoot && categories.some(item => item.id === asset.categoryId);
-  if (!categoryIds?.has(asset.categoryId)) return false;
-  return asset.categoryId !== category;
+  if (typedRoot) return assetMode(asset) === typedRoot && memberships.some(id => categories.some(item => item.id === id));
+  return memberships.some(id => id !== category && categoryIds?.has(id));
 }
 
 /** A like is deliberately short lived. The library may retain the marker for

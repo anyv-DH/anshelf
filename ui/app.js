@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
 import { call } from './api.js';
 import { icon } from './icons.js';
-import { assetMode, categoryDescendantIds, escapeHtml as e, gridColumns, isLiked, selectAsset } from './model.js';
+import { assetCategoryIds, assetMode, categoryDescendantIds, escapeHtml as e, gridColumns, isLiked, selectAsset } from './model.js';
 import { categoryOptions, previewDialog, renderGrid, renderInspector, renderSelection, renderSidebar, renderStatus, renderSubcategories } from './render.js';
 import { categoryBrowser, favoriteCategoryGroups } from './category-browser.mjs';
 import { mountPreviewViewer } from './preview-viewer.mjs';
@@ -97,7 +97,7 @@ async function pollRefresh() {
   clearTimeout(refreshTimer); refreshTimer = setTimeout(pollRefresh, delay);
 }
 async function run(method, ...args) {
-  if (['assignCategory', 'createCategory', 'renameCategory', 'deleteCategory', 'updateAsset', 'removeAssets', 'setCategoryPinned'].includes(method)) clearUndoToast();
+  if (['assignCategory', 'addToCategory', 'removeFromCategory', 'createCategory', 'renameCategory', 'deleteCategory', 'updateAsset', 'removeAssets', 'setCategoryPinned'].includes(method)) clearUndoToast();
   busy(true);
   try { return await call(method, ...args); }
   catch (error) { errorToast(error); throw error; }
@@ -197,6 +197,7 @@ async function importItems(method) {
     const failed = result.failed?.length || 0;
     toast(`已导入 ${result.added || 0} 份${result.duplicates ? ` · 跳过重复 ${result.duplicates} 份` : ''}${failed ? ` · ${failed} 份失败` : ''}`);
     await refresh();
+    if (state.importNotice) { toast(state.importNotice, null, 7000); state.importNotice = null; }
   }
   catch { /* run already reported */ }
 }
@@ -218,8 +219,18 @@ async function deleteCategory(id) {
 }
 async function assignCategory(id) {
   const selected = [...state.selected]; if (!selected.length) return;
-  if (!state.snapshot.assets.some(asset => state.selected.has(asset.id) && (asset.categoryId || null) !== (id || null))) { toast('这些素材已经在这个分类里'); return; }
+  if (!state.snapshot.assets.some(asset => state.selected.has(asset.id) && (assetCategoryIds(asset).length !== (id ? 1 : 0) || (asset.categoryId || null) !== (id || null)))) { toast('这些素材已经在这个分类里'); return; }
   try { await run('assignCategory', selected, id || null); state.quickCategories = false; toast(`已将 ${selected.length} 项归入${id ? `“${state.snapshot.categories.find(item => item.id === id)?.name || ''}”` : '未分类'}`, { action: 'undo-assign', label: '撤销' }, 5000); await refresh(); }
+  catch { /* run already reported */ }
+}
+async function addToCategory(id) {
+  const selected = [...state.selected]; if (!selected.length || !id) return;
+  if (state.snapshot.assets.filter(asset => state.selected.has(asset.id)).every(asset => assetCategoryIds(asset).includes(id))) { toast('这些素材已加入这个分类'); return; }
+  try { await run('addToCategory', selected, id); state.quickCategories = false; await refresh(); toast(`已加入“${state.snapshot.categories.find(item => item.id === id)?.name || ''}” · 原分类保留`, { action: 'undo-assign', label: '撤销' }, 5000); }
+  catch { /* run already reported */ }
+}
+async function removeFromCategory(id, categoryId) {
+  try { await run('removeFromCategory', [id], categoryId); await refresh(); toast('已从这个分类移除 · 素材仍保留', { action: 'undo-assign', label: '撤销' }, 5000); }
   catch { /* run already reported */ }
 }
 async function undoAssign() {
@@ -355,7 +366,7 @@ async function action(event) {
     return renderAll({ preserveInspector: false });
   }
   if (actionName === 'toggle-inspector') { state.inspectorOpen = !state.inspectorOpen; renderInspector(state); return; }
-  if (actionName === 'toggle-quick-categories') { state.quickCategories = !state.quickCategories; return renderSelection(state); }
+  if (actionName === 'toggle-quick-categories' || actionName === 'toggle-add-categories') { const mode = actionName === 'toggle-add-categories' ? 'add' : 'move'; state.quickCategories = state.quickCategoryMode !== mode || !state.quickCategories; state.quickCategoryMode = mode; return renderSelection(state); }
   if (actionName === 'zoom-preview') { if (!event.ctrlKey && !event.metaKey && !event.shiftKey) openPreview(id); return; }
   if (actionName === 'play-audio') return playAudio(id);
   if (actionName === 'audio-toggle') return playAudio(audio.state().id);
@@ -383,6 +394,8 @@ async function action(event) {
   if (actionName === 'save-category') return saveCategory(id);
   if (actionName === 'delete-category') return deleteCategory(id);
   if (actionName === 'assign') return assignCategory(id);
+  if (actionName === 'add-to-category') return addToCategory(id);
+  if (actionName === 'remove-from-category') return removeFromCategory(id, target.dataset.categoryId);
   if (actionName === 'undo-assign') return undoAssign();
   if (actionName === 'remove') return removeSelected();
   if (actionName === 'favorite') { event.stopPropagation(); return toggleFavorite(id); }
@@ -500,7 +513,8 @@ document.querySelectorAll('[data-icon]').forEach(element => { element.innerHTML 
 let savedTheme = 'dark', savedDensity = 'auto';
 try { savedTheme = localStorage.getItem('anshelf-theme') || 'dark'; savedDensity = localStorage.getItem('anshelf-density') || 'auto'; const folds = JSON.parse(localStorage.getItem('anshelf-category-folds') || '[]'); if (Array.isArray(folds)) state.collapsedCategories = new Set(folds.filter(id => typeof id === 'string')); } catch { /* use default */ }
 const unsubscribeDragError = window.shelf?.onDragError?.(message => toast(typeof message === 'string' ? message : message?.message || '未能开始拖拽，请重试。'));
-window.addEventListener('beforeunload', () => { refreshStopped = true; clearTimeout(refreshTimer); disposePreview(); audio.dispose(); stageDrag.dispose(); unsubscribeDragError?.(); });
+const unsubscribeImportNotice = window.shelf?.onImportNotice?.(message => { state.importNotice = String(message); if (!state.busy) { toast(state.importNotice, null, 7000); state.importNotice = null; } });
+window.addEventListener('beforeunload', () => { refreshStopped = true; clearTimeout(refreshTimer); disposePreview(); audio.dispose(); stageDrag.dispose(); unsubscribeDragError?.(); unsubscribeImportNotice?.(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !refreshStopped) { clearTimeout(refreshTimer); pollRefresh(); } });
 setTheme(savedTheme);
 setDensity(savedDensity);

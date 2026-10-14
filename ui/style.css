@@ -143,7 +143,7 @@ h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.7px; }
 .preview-placeholder { display: flex; flex-direction: column; gap: 11px; align-items: center; color: var(--faint); font-size: 9px; }
 .preview-placeholder.error { color: var(--danger); }.preview-placeholder small { font-size: 10px; color: var(--faint); }
 .selection-bar { display: flex; align-items: center; gap: 14px; background: var(--accent-soft); border: 1px solid #b6a1ee20; border-radius: 8px; padding: 9px 10px; margin-bottom: 19px; flex-wrap: wrap; }
-.selection-title { display: flex; align-items: center; gap: 7px; font-size: 10px; white-space: nowrap; }
+.selection-title { display: flex; align-items: center; gap: 7px; font-size: 10px; white-space: nowrap; flex-wrap: wrap; }
 .selection-title strong { font-weight: 500; color: var(--ink); }
 .selection-check { color: var(--violet); display: flex; }
 .text-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: var(--violet); font-size: 10px; padding: 4px; }
@@ -198,6 +198,11 @@ h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.7px; }
 .field-hint { position: absolute; right: 0; font-size: 9px; color: var(--faint); }
 .tag-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: -8px; }
 .tag-list button { font-size: 9px; color: var(--violet); border-radius: 4px; padding: 3px 7px; background: var(--surface-3); }
+.asset-categories { display: flex; flex-direction: column; gap: 9px; }
+.asset-categories .field-hint { position: static; line-height: 1.5; }
+.asset-categories .tag-list { margin: 0; }
+.asset-categories .tag-list button { overflow-wrap: anywhere; text-align: left; }
+.asset-categories > .text-button { align-self: flex-start; }
 .metadata { border-top: 1px solid var(--line); margin: 21px 0 0; padding: 17px 0 0; display: grid; gap: 12px; font-size: 9px; }
 .metadata div { display: flex; justify-content: space-between; gap: 15px; }
 .metadata dt { flex: 0 0 auto; color: var(--faint); }.metadata dd { color: var(--muted); margin: 0; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }

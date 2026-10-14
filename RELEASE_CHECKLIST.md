@@ -8,8 +8,8 @@
 - [x] Native installation discovery resolves this PC's Animate.exe and correctly detects the existing process. Startup from an absent host is tested with process doubles; the user's Animate remains open.
 - [x] Packaged shared-category workflow 7/7, category journey 11/11 and portable ordinary/effect/audio destination checks 3/3 pass without page errors.
 - [x] Final source-to-ASAR audit matches 74 files, 6 demos and 11 external plugin files. Exact delivered portable passes destination checks 3/3 and startup/preview/density/theme smoke 5/5. Delivered installer/portable hashes match the build.
-- [ ] Desktop target update with the existing library preserved.
-- [ ] Push the reviewed source, tag v0.3.4 and verify GitHub release download assets.
+- [x] Desktop target points to the exact delivered 0.3.4 portable. A normal launch confirms running version 0.3.4 and both category controls; the live library hash remains unchanged, including all 261 assets and 195 urban characters. The prior shortcut and latest index are backed up; Animate remains running.
+- [x] Reviewed source commit 66a6727 and tag v0.3.4 are pushed to anyv-DH/anshelf. The release is public and marked latest; all five uploaded assets match local sizes and SHA256 digests, with installer, portable, plugin, usage guide and checksum file available.
 - GitHub publication is explicitly user-authorized on 2026-10-15. Preserve appId/AppData identity, prior packages and independent editable working copies. Exclude user assets and private recovery data from the repository.
 
 ## 0.3.3 desktop artifact correction

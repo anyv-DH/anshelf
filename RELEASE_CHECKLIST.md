@@ -1,5 +1,14 @@
 # Local release checklist
 
+## 0.3.5 流畅导入与旋转预览发布门禁
+
+- [x] `package.json` 版本为 0.3.5；普通/特效导入与失败重试不再调用或启动 AN，显式“用 AN 打开”保持可用。
+- [x] 经典旋转补间保留 transformation point；偏心旋转、平移缩放、mask/camera/rig 回归通过。旧预览需手动重新生成。
+- [x] 全量回归 256/256，打包版导入 9/9，动画预览 10/10，便携三类导入分类 3/3 与冒烟 5/5，页面错误为 0；`verify-release.cjs` 通过，74 个 ASAR 源文件、6 个演示文件、11 个插件文件与源码一致。
+- [x] 安装版、便携版与中文分享包已生成，分享包内含置顶的 `00-请先阅读安装说明`、中文 TXT/HTML 说明、插件和 SHA256 清单；插件签名文件 9 项 digest 保持一致。
+- [x] 桌面正常关闭旧管理器并切换到交付的 0.3.5；运行 ASAR 哈希匹配最终构建，261 素材、7 分类、195 都市人物及原库哈希保持不变，最新索引和旧快捷方式已备份，AN 保持运行。
+- [ ] 提交 0.3.5、创建并推送 `v0.3.5`，再通过 GitHub digest 核对后公开 latest。
+
 ## 0.3.4 repair and publication gates
 
 - [x] Failing regression reproduces the UUID name and missing additive category operation; old packaged UI fails the new-action assertion.

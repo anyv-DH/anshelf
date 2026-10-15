@@ -6,7 +6,9 @@ Version-one records retain `categoryId` as the primary category and gain ordered
 
 AN-open working copies use `opened/<unique directory>/<safe material name>.fla`. The directory is validated inside the canonical library root; COPYFILE_EXCL and a fresh directory isolate simultaneous opens and saved user work. Names retain Unicode, with Windows reserved characters/names and trailing dots normalized.
 
-`animate-launcher` probes processes only during a pending-preview import. It discovers the executable through a validated environment override, the local FLA association/App Paths registry values, and standard Adobe installation folders. Registry commands are parsed as data; startup uses an absolute Animate.exe path, no shell, and no document argument. Concurrent requests share one promise, and a 20-second startup grace prevents repeat spawns. It does not watch processes at idle. Offline preview workers and import IPC completion run independently from startup. Errors reach the fixed `shelf:import-notice` event; they never roll back successful imports or keep the interface busy while probing processes.
+Since 0.3.5, imports and preview retries never probe or launch Animate. The host queues the local worker and returns after metadata/sidecar validation; process discovery is not on that path, even after a failed preview. Main no longer wires an automatic launcher into the host. Explicit `openInAnimate` still creates a named isolated working copy and opens it through the configured executable or file association. Stage insertion continues to require a running receiver. This supersedes 0.3.4's unconditional background startup behavior.
+
+Classic tween matrix interpolation preserves the symbol-local transformation point in parent space: interpolate its authored endpoint positions, then solve translation after rotation/scale interpolation. All classic consumers (visible symbols, masks, camera sampling and rig-parent matrices) use the same correction. The GIF worker retains its fixed union crop, so authored movement is preserved rather than recentered per frame.
 
 ## 0.3.2 contracts
 

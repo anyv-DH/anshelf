@@ -1,3 +1,4 @@
+/* AnShelf modifications Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
 import type {
   FLADocument,
   Timeline,
@@ -1253,7 +1254,7 @@ export class FLARenderer {
           element.type === 'symbol') {
         const next = this.findTweenPartner(element, elementIndex, nextKeyframe);
         if (next.type === 'symbol') {
-          maskElement = withInstanceMatrix(element, this.interpolateTweenMatrix(element.matrix, next.matrix, progress, frame));
+          maskElement = withInstanceMatrix(element, this.interpolateTweenMatrix(element.matrix, next.matrix, progress, frame, element.transformationPoint));
         }
       }
 
@@ -1433,7 +1434,7 @@ export class FLARenderer {
             frame.acceleration,
             frame.tweens
           );
-          return { ...element, matrix: this.interpolateTweenMatrix(element.matrix, nextElement.matrix, progress, frame) };
+          return { ...element, matrix: this.interpolateTweenMatrix(element.matrix, nextElement.matrix, progress, frame, element.transformationPoint) };
         }
       }
     }
@@ -1687,10 +1688,10 @@ export class FLARenderer {
           result = multiplyMatrices(rig.parentNow, this.interpolateTweenMatrix(
             multiplyMatrices(rig.startInverse, element.matrix),
             multiplyMatrices(rig.endInverse, partner.matrix),
-            progress, frame
+            progress, frame, element.transformationPoint
           ));
         } else {
-          result = this.interpolateTweenMatrix(element.matrix, partner.matrix, progress, frame);
+          result = this.interpolateTweenMatrix(element.matrix, partner.matrix, progress, frame, element.transformationPoint);
           if (rig) result = multiplyMatrices(multiplyMatrices(rig.parentNow, rig.startInverse), result);
         }
       } else {
@@ -2007,7 +2008,7 @@ export class FLARenderer {
       const startMatrix = element.matrix;
       const endMatrix = nextDisplayElement.matrix;
 
-      const interpolatedMatrix = this.interpolateTweenMatrix(startMatrix, endMatrix, progress, frame);
+      const interpolatedMatrix = this.interpolateTweenMatrix(startMatrix, endMatrix, progress, frame, element.transformationPoint);
 
       // Interpolate color transform if either element has one
       const interpolatedColorTransform = this.lerpColorTransform(
@@ -2033,7 +2034,7 @@ export class FLARenderer {
 
   // Interpolate a symbol's matrix across a motion tween (honors rotation and
   // orient-to-path settings on the tween's start frame).
-  private interpolateTweenMatrix(startMatrix: Matrix, endMatrix: Matrix, progress: number, frame?: Frame): Matrix {
+  private interpolateTweenMatrix(startMatrix: Matrix, endMatrix: Matrix, progress: number, frame?: Frame, pivot?: Point): Matrix {
     let interpolatedMatrix: Matrix;
 
     // A rotation tween (CW/CCW) turns that way, plus its extra whole turns.
@@ -2050,6 +2051,23 @@ export class FLARenderer {
         startMatrix,
         endMatrix
       );
+    }
+
+    // An authored keyframe matrix already includes the local transformation
+    // point, but decomposing/rotating its linear part does not preserve that
+    // compensation between keys. Interpolate the pivot's parent-space position
+    // and solve the translation again; otherwise an off-origin spinner orbits
+    // its registration origin instead of turning in place. The pivot stays in
+    // symbol-local coordinates, including when these matrices are rig-local.
+    if (pivot && Number.isFinite(pivot.x) && Number.isFinite(pivot.y)) {
+      const startX = startMatrix.a * pivot.x + startMatrix.c * pivot.y + startMatrix.tx;
+      const startY = startMatrix.b * pivot.x + startMatrix.d * pivot.y + startMatrix.ty;
+      const endX = endMatrix.a * pivot.x + endMatrix.c * pivot.y + endMatrix.tx;
+      const endY = endMatrix.b * pivot.x + endMatrix.d * pivot.y + endMatrix.ty;
+      interpolatedMatrix.tx = startX + (endX - startX) * progress
+        - interpolatedMatrix.a * pivot.x - interpolatedMatrix.c * pivot.y;
+      interpolatedMatrix.ty = startY + (endY - startY) * progress
+        - interpolatedMatrix.b * pivot.x - interpolatedMatrix.d * pivot.y;
     }
 
     return interpolatedMatrix;

@@ -112,7 +112,7 @@ test('opening an asset in Animate keeps a safe meaningful basename while isolati
   await host.queue.idle();
 });
 
-test('import asks for Animate once for pending FLA previews without blocking import', async t => {
+test('pending FLA import never starts Animate automatically', async t => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-auto-animate-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const source = path.join(base, 'a.fla');
@@ -121,13 +121,13 @@ test('import asks for Animate once for pending FLA previews without blocking imp
   const host = await createHost({ root: path.join(base, 'library'), render: async () => ({ previewPath: null }), ensureAnimateRunning: async () => { starts++; } });
   const result = await host.api.importPaths([source]);
   assert.equal(result.added, 1);
-  assert.equal(starts, 1);
+  assert.equal(starts, 0);
   await host.api.importPaths([source], { preferExistingPreview: false });
-  assert.equal(starts, 2);
+  assert.equal(starts, 0);
   await host.queue.idle();
 });
 
-test('Animate startup failure does not block offline preview queue', async t => {
+test('offline preview queue does not probe Animate or emit startup failures', async t => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-auto-animate-failure-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const source = path.join(base, 'a.fla');
@@ -137,8 +137,8 @@ test('Animate startup failure does not block offline preview queue', async t => 
   const result = await host.api.importPaths([source]);
   assert.equal(result.added, 1);
   assert.equal(host.library.snapshot().assets.length, 1);
-  await host.animateIdle();
-  assert.match(notices[0], /AN unavailable/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(notices, []);
   await host.queue.idle();
 });
 

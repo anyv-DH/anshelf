@@ -1,12 +1,18 @@
 # Test plan
 
+## 0.3.5 regressions
+
+`tests/import-startup-responsiveness.test.cjs` and `tests/host.test.cjs` require small imports, ordinary/effect preview queues, slow external startup, failed render and retry to complete without any automatic Animate startup. Four assertions first failed against 0.3.4. A gated renderer verifies import returns while preview work remains pending; explicit named working-copy open still invokes the native callback. Startup is now removed from the import path rather than moved to another background task.
+
+`tests/preview-pivot.test.cjs` exercises the real bundled renderer with a nonzero transformation point and three-turn classic spin. It checks stable center, rotation, preserved movement/scale, mask/camera/rig parity and origin-pivot behavior. Synthetic fixtures are public; the user's source FLA is only read in private test output. Real Electron worker/GIF decode checks supplement affine geometry; no claim of universal parity for scripts, fonts or every FLA.
+
 ## 0.3.4 regressions
 
-`tests/host.test.cjs` catches the original UUID basename, checks meaningful Windows-safe names in unique working directories, simultaneous opens and immutable originals. It also verifies pending-FLA startup requests, sidecar/audio skip paths and warning-only startup failures. `tests/animate-launcher.test.cjs` validates association parsing, single-flight and grace-period behavior, existing processes and spawn retries. Native discovery on this PC resolves `D:/AN2023/Adobe Animate 2023/Animate.exe`; the running process is detected. The user's open Animate is never closed to simulate a missing host.
+`tests/host.test.cjs` catches the original UUID basename, checks meaningful Windows-safe names in unique working directories, simultaneous opens and immutable originals. The old pending-FLA startup requirement is superseded by 0.3.5 above. `tests/animate-launcher.test.cjs` retains tests for the standalone helper; it is no longer connected to imports. The user's open Animate is never closed to simulate a missing host.
 
 `tests/library.test.cjs` and `ui/multi-category.test.mjs` cover shared memberships, idempotent addition, scope validation, invalid-batch rollback, remove-one-link, category deletion/promotion, undo, reimport semantics, legacy v1 history, restart, unique counts, favorite groups and child-folder filtering.
 
-`tests/import-startup-responsiveness.test.cjs` holds the process probe behind a gate and requires both import IPC and the offline queue to finish before releasing it. It first failed with synchronous startup awaiting; the background startup task now passes and reports errors through a separate notification.
+0.3.4 originally used a background startup task to avoid waiting for process discovery. User reports showed that task could still launch AN after a small import had finished; 0.3.5 removes it altogether.
 
 `scripts/multi-category-ui-e2e.cjs` runs real Electron/main/preload/worker in an isolated library/profile, imports a real AN-saved demo, decodes its preview, clicks the new add action, checks both category trees and favorites, removes one link and undoes it, verifies the AN-open callback's basename, then restarts. The actual previous 0.3.3 binary fails its new-button assertion (`test-output/multi-before/result.json`). AN file-open is intercepted, so this is callback/path evidence rather than a claim about the visible native AN tab. Repeat on the final packaged binary with `ANSHELF_UI_EXECUTABLE`.
 0.3.3 packaging regression: `scripts/portable-import-destination-e2e.cjs` launches the exact delivered portable executable with isolated data/profile directories. It asserts that ordinary, effect and audio imports visibly offer a destination, then creates a root folder, reselects it and creates a child. The original desktop 0.3.2 artifact fails on the missing ordinary destination selector. Run this against the delivered copy after packaging, in addition to `verify-release.cjs` and the packaged category import journey; source-only tests cannot prove delivered functionality.

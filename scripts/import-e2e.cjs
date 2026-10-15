@@ -19,6 +19,22 @@ async function run() {
   const app = await playwright._electron.launch({ executablePath, args: [...(packaged ? [] : [root]), `--user-data-dir=${path.join(base, 'profile')}`], env: { ...process.env, ANSHELF_DATA_DIR: path.join(base, 'data') }, timeout: 60000 });
   const errors = [];
   try {
+    // Guard the real main process boundary: importing/previewing must neither
+    // probe local applications with subprocesses nor open a native file.
+    await app.evaluate(({ shell }) => {
+      const childProcess = process.getBuiltinModule('child_process');
+      global.__anshelfExternalLaunches = [];
+      global.__anshelfOriginalSpawn = childProcess.ChildProcess.prototype.spawn;
+      global.__anshelfOriginalOpenPath = shell.openPath;
+      childProcess.ChildProcess.prototype.spawn = function(options) {
+        global.__anshelfExternalLaunches.push({ kind: 'spawn', file: options?.file });
+        throw new Error('Unexpected external process during import');
+      };
+      shell.openPath = async file => {
+        global.__anshelfExternalLaunches.push({ kind: 'openPath', file });
+        throw new Error('Unexpected external file open during import');
+      };
+    });
     const png = await app.evaluate(({ nativeImage }) => nativeImage.createFromBitmap(Buffer.alloc(16 * 16 * 4, 200), { width: 16, height: 16 }).toPNG().toString('base64'));
     await fs.writeFile(path.join(originals, '已有预览.png'), Buffer.from(png, 'base64'));
     const page = await app.firstWindow();
@@ -50,6 +66,15 @@ async function run() {
     await page.locator('[data-action="import-files"]').click();
     await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('没有导入'));
     assert.equal((await page.evaluate(() => window.shelf.snapshot())).assets.length, 1);
+    // Let delayed tasks settle as well; a finished import must not leave a
+    // background Animate launch behind it.
+    await page.waitForTimeout(300);
+    const externalLaunches = await app.evaluate(() => global.__anshelfExternalLaunches);
+    assert.deepEqual(externalLaunches, [], 'offline import must never launch or probe Animate');
+    await app.evaluate(({ shell }) => {
+      process.getBuiltinModule('child_process').ChildProcess.prototype.spawn = global.__anshelfOriginalSpawn;
+      shell.openPath = global.__anshelfOriginalOpenPath;
+    });
     let opened;
     await app.evaluate(({ shell }) => { shell.openPath = async filename => { global.__anshelfPluginPath = filename; return ''; }; });
     await page.locator('#connection').click();
@@ -59,7 +84,7 @@ async function run() {
     await fs.access(path.join(opened, 'CSXS', 'manifest.xml'));
     if (packaged) assert.match(opened, /resources[\\/]AnimatePlugin$/);
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ passed: true, packaged, checks: ['native import entry', 'valid same-name image reused', 'unchecked option renders FLA', 'reenabling preference replaces the generated preview', 'duplicate is folded', 'original bytes unchanged', 'canceled picker feedback', 'external plugin folder exists'], errors }, null, 2));
+    console.log(JSON.stringify({ passed: true, packaged, checks: ['native import entry', 'valid same-name image reused', 'unchecked option renders FLA', 'reenabling preference replaces the generated preview', 'duplicate is folded', 'original bytes unchanged', 'canceled picker feedback', 'import and preview never launch or probe external applications', 'external plugin folder exists'], errors }, null, 2));
   } finally { await app.close(); }
 }
 

@@ -35,10 +35,9 @@ async function isOriginalFile(file,asset){
   }catch{return false;}
 }
 
-async function createHost({root,render,validateImage=async()=>true,createPoster=async()=>false,pickFiles=async()=>[],pickFolder=async()=>[],compact=async()=>false,openPluginFolder=async()=>{},openInAnimate=async()=>{throw new Error('当前环境无法打开 Animate');},ensureAnimateRunning=async()=>{},onImportNotice=()=>{},revealFile=async()=>{throw new Error('当前环境无法打开文件所在位置');},setTheme=async theme=>theme,windowAction=async()=>({maximized:false}),previewUrl=id=>`anshelf://preview/${id}`,mediaUrl=id=>`anshelf://media/${id}`,posterUrl=id=>`anshelf://poster/${id}`,demoPath=path.join(__dirname,'../demo')}){
+async function createHost({root,render,validateImage=async()=>true,createPoster=async()=>false,pickFiles=async()=>[],pickFolder=async()=>[],compact=async()=>false,openPluginFolder=async()=>{},openInAnimate=async()=>{throw new Error('当前环境无法打开 Animate');},revealFile=async()=>{throw new Error('当前环境无法打开文件所在位置');},setTheme=async theme=>theme,windowAction=async()=>({maximized:false}),previewUrl=id=>`anshelf://preview/${id}`,mediaUrl=id=>`anshelf://media/${id}`,posterUrl=id=>`anshelf://poster/${id}`,demoPath=path.join(__dirname,'../demo')}){
   const library=await Library.open(root);const bridge=new Bridge(root);
   const queue=new PreviewQueue(library,render);
-  const animateTasks=new Set();
   const snapshot=async(status={})=>{const data=library.snapshot();return{...data,assets:data.assets.map(a=>({...a,
     mediaUrl:a.kind==='audio'?mediaUrl(a.id):null,
     previewPosterUrl:a.previewPosterPath?posterUrl(a.id)+'?v='+encodeURIComponent(a.previewRevision||a.id):null,
@@ -71,11 +70,6 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     }
     const pending=(result.assets||[]).map(a=>library.getAsset(a.id)).filter(a=>a&&a.kind!=='audio'&&a.previewStatus==='pending');
     queue.add(pending,true);
-    if(pending.length) {
-      const task=Promise.resolve().then(()=>ensureAnimateRunning()).catch(error=>onImportNotice('AN 自动启动未完成：'+String(error.message||error)+'。素材已导入，仍会继续自动生成预览。')).catch(()=>{});
-      animateTasks.add(task);
-      task.then(()=>animateTasks.delete(task));
-    }
     return result;
   }
   const api={
@@ -141,6 +135,6 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     demo:async()=>importPaths([demoPath],{preferExistingPreview:true}),compact,openPluginFolder
   };
   queue.add(library.snapshot().assets.filter(a=>a.previewStatus==='pending'));
-  return{api,library,bridge,queue,root,animateIdle:()=>Promise.all([...animateTasks])};
+  return{api,library,bridge,queue,root};
 }
 module.exports={createHost,animateFilename};

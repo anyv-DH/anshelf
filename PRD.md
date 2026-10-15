@@ -6,7 +6,8 @@
 ## Core requirements
 - 0.3.4：“用 AN 打开”创建独立工作目录，文件仍用素材名称，例如“都市人物_女主角.fla”；同名素材、重复或并发打开各自隔离，不覆盖先前工作副本。
 - 0.3.4：选中素材后，“选择分类”替换原分类；“加入其他分类”保留已有分类，把同一素材加入其他兼容文件夹。多个分类共享一个素材和预览，计数/搜索/收藏/子文件夹过滤识别全部归属；详情中点击分类 × 只取消该分类，支持撤销和重开。
-- 0.3.4：导入 FLA 后若需要自动预览，检查并启动已安装的 Animate；已有 AN 进程时不重复启动。同名预览可用和音频导入不启动 AN。启动失败明确提示，离线预览和成功导入继续完成，不把素材交给 AN 文件导入器。
+- 0.3.5：导入、生成/重试预览均完全离线，不检查、不启动 Animate，避免小文件导入完成后又弹出 AN。只有用户明确「用 AN 打开」才打开工作副本；舞台粘贴继续由已打开的 AN 接收面板处理。预览排队后导入立即返回，失败不阻断其他素材。
+- 0.3.5：经典旋转补间按元件变换中心插值位置，修复偏离注册原点的原地旋转变成绕圈漂移；保留素材原本的位移、缩放和旋转，不逐帧强制居中。
 - Import .fla files and folders, preserve originals, deduplicate identical bytes, and retain source paths.
 - Import dialog has “优先使用同名预览图” enabled by default. Matching same-stem PNG/JPG/JPEG/WebP is reused; otherwise previews are automatically generated and cached. Disable to force regeneration. Failed previews can retry.
 - Categories, favorites, tags, search, multi-select, instant category assignment and undo. Categories are metadata; originals are never moved.

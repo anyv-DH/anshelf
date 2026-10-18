@@ -1,5 +1,9 @@
 # Architecture
 
+## 0.3.6 portable runtime isolation
+
+Set `build.portable.unpackDirName` to boolean `true`, so electron-builder's NSIS portable launcher uses a per-launch `$PLUGINSDIR/app` rather than a build-wide fixed temporary directory. The default launcher removes its extraction directory both before extraction and after exit; a second launch could therefore delete the first instance's worker/runtime files even though Electron's single-instance lock keeps its main window alive. Runtime extraction is isolated from the unchanged persistent library location. `scripts/portable-relaunch-e2e.cjs` exercises the packaged executable, second launch, preview retry and image decoding with an isolated library/profile.
+
 ## 0.3.4 contracts
 
 Version-one records retain `categoryId` as the primary category and gain ordered unique `categoryIds`. Reading old records derives their membership in memory without rewriting the index. `assignCategory` and explicit import destinations replace memberships; `addToCategory` preserves them and validates the destination scope. `removeFromCategory` and category deletion remove only that link, promoting the next surviving category when necessary. Atomic history stores both fields; legacy undo entries mentioning only `categoryId` restore the matching single membership. Whole-library counts, category browsing, favorite groups and child-folder hiding match all memberships, while cards and the complete asset count remain unique.

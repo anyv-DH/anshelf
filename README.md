@@ -1,6 +1,6 @@
-# 安安素材管理器 0.3.5
+# 安安素材管理器 0.3.6
 
-0.3.5：导入和自动生成预览在本机后台完成，不再额外启动 AN；修复部分旋转特效生成 GIF 时中心跑偏的问题。保留按素材名称打开、同一素材加入多个分类，以及导入时选择、新建文件夹或子文件夹的功能。下载与安装方法见下文，更新详情见 [0.3.5 更新说明](docs/releases/0.3.5.md)。
+0.3.6：修复重复打开便携版后，新导入素材显示“预览失败”的问题。导入和自动预览继续在本机后台完成，不需要打开 AN。已有素材、分类和预览继续保留；失败的素材可在详情中点击“重新生成预览”。下载与安装方法见下文，更新详情见 [0.3.6 更新说明](docs/releases/0.3.6.md)。
 作者：安屿动画。一个面向 Adobe Animate 制作者的本地素材库：导入 FLA、GIF 和音频，自动准备预览，搜索分类后，把完整素材放进 AN 当前舞台。
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ## 先看图：从导入到粘贴
@@ -89,12 +89,12 @@
 
 ## 快速开始
 ### 安装版（推荐）
-1. 打开 [最新版发布页](https://github.com/anyv-DH/anshelf/releases/latest)，下载 `AnAn-AssetManager-Setup-0.3.5.exe`。
+1. 打开 [最新版发布页](https://github.com/anyv-DH/anshelf/releases/latest)，下载 `AnAn-AssetManager-Setup-0.3.6.exe`。
 2. 双击安装包，选择安装位置并完成安装；安装程序会创建桌面快捷方式。
 3. 从桌面快捷方式启动软件。卸载软件不会主动删除 `%APPDATA%\\AnShelf` 素材库。
 
 ### 便携版
-下载 `AnAn-AssetManager-Portable-0.3.5.exe` 后直接双击即可运行，不需要安装 Node.js，也不需要管理员权限。建议把它和同目录的说明文件一起保存；移动程序不会移动素材库。更新时先退出旧版，再打开新版，已有素材库继续使用。
+下载 `AnAn-AssetManager-Portable-0.3.6.exe` 后直接双击即可运行，不需要安装 Node.js，也不需要管理员权限。建议把它和同目录的说明文件一起保存；移动程序不会移动素材库。更新时先退出旧版，再打开新版，已有素材库继续使用。
 
 ### 第一次连接 Animate
 下载发布页中的 `AnAn-AssetManager-AnimatePlugin.zip`，完整解压后，进入目录运行 `install.ps1`。安装面板后重启 Animate，在「窗口 > 扩展 > 安安素材管理器」打开面板，再按“粘贴到舞台”即可。详细步骤见插件目录的 `README.md`。

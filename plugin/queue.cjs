@@ -51,7 +51,7 @@ class Queue {
     if (!fs.existsSync(file)) return null;
     if (fs.statSync(file).size > 65536) throw new Error('素材请求过大');
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return value && value.version === 1 ? value : null;
+    return value && (value.version === 1 || value.version === 2) ? value : null;
   }
   atomic(name, value) {
     const target = this.file(name), temporary = target + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
@@ -67,7 +67,7 @@ class Queue {
     return candidate;
   }
   validate(request) {
-    if (!request || request.version !== 1 || !/^[a-zA-Z0-9-]{1,80}$/.test(request.requestId || '') || !request.asset || !/^[a-f0-9]{64}$/.test(request.asset.hash || '')) throw new Error('无效的素材请求');
+    if (!request || request.version !== 2 || !/^[a-zA-Z0-9-]{1,80}$/.test(request.requestId || '') || !request.asset || !/^[a-f0-9]{64}$/.test(request.asset.hash || '')) throw new Error('无效的素材请求');
     validateDelivery(request);
     if (path.resolve(request.managedRoot || '') !== this.root) throw new Error('素材库根目录不匹配');
     const source = this.requireInside(request.asset.sourcePath, 'assets');
@@ -76,6 +76,12 @@ class Queue {
   }
   pending() {
     const request = this.read('pending.json');
+    if (request && request.version !== 2) {
+      const pendingFile = this.file('pending.json');
+      noLinks(pendingFile);
+      fs.unlinkSync(pendingFile);
+      return null;
+    }
     if (request) this.validate(request);
     return request;
   }
@@ -99,19 +105,25 @@ class Queue {
     return request;
   }
   heartbeat(busy, documentId = null) {
-    this.atomic('status.json', { version: 1, updatedAt: Date.now(), app: 'Animate', busy: Boolean(busy), capabilities: { stageDrop: 1 }, documentId: validDocumentId(documentId) ? documentId : null });
+    this.atomic('status.json', { version: 1, updatedAt: Date.now(), app: 'Animate', busy: Boolean(busy), capabilities: { stageDrop: 1, directSource: 1 }, documentId: validDocumentId(documentId) ? documentId : null });
   }
   prepare(request) {
     const source = this.validate(request);
     validateDelivery(request, Date.now());
     if (fs.statSync(source).size > MAX_FLA_BYTES) throw new Error('素材 FLA 过大，当前插入上限为 512 MB');
-    const bytes = fs.readFileSync(source);
-    if (crypto.createHash('sha256').update(bytes).digest('hex') !== request.asset.hash) throw new Error('素材哈希不匹配，不能插入');
-    const temporary = this.file(path.join('temp', request.requestId + '.fla'));
-    this.requireInside(temporary, 'bridge/temp');
-    fs.mkdirSync(path.dirname(temporary), { recursive: true });
-    fs.writeFileSync(temporary, bytes, { flag: 'wx' });
-    const prepared = { version: 1, requestId: request.requestId, managedRoot: localURI(this.root), asset: { id: request.asset.id, hash: request.asset.hash, name: request.asset.name, sourceURI: localURI(source) }, temporaryURI: localURI(temporary), temporaryPath: temporary };
+    const descriptor = fs.openSync(source, 'r');
+    const bytes = Buffer.allocUnsafe(1024 * 1024);
+    const hash = crypto.createHash('sha256');
+    try {
+      let position = 0, count;
+      while ((count = fs.readSync(descriptor, bytes, 0, bytes.length, position)) > 0) {
+        if (position + count > MAX_FLA_BYTES) throw new Error('素材 FLA 过大，当前插入上限为 512 MB');
+        hash.update(bytes.subarray(0, count));
+        position += count;
+      }
+    } finally { fs.closeSync(descriptor); }
+    if (hash.digest('hex') !== request.asset.hash) throw new Error('素材哈希不匹配，不能插入');
+    const prepared = { version: 2, requestId: request.requestId, managedRoot: localURI(this.root), asset: { id: request.asset.id, hash: request.asset.hash, name: request.asset.name, sourceURI: localURI(source) } };
     if (request.delivery === 'stage-drop') Object.assign(prepared, { delivery: request.delivery, createdAt: request.createdAt, expiresAt: request.expiresAt, targetDocumentId: request.targetDocumentId });
     return prepared;
   }
@@ -123,7 +135,6 @@ class Queue {
     const marker = this.requireInside(this.file(path.join('drag', request.requestId + '.anshelf-transfer')), 'bridge/drag');
     if (fs.existsSync(marker)) fs.unlinkSync(marker);
   }
-  cleanup(file) { this.requireInside(file, 'bridge/temp'); if (fs.existsSync(file)) fs.unlinkSync(file); }
 }
 
 module.exports = { Queue, localURI, MAX_FLA_BYTES, DRAG_TTL_MS, STAGE_DROP_TTL_MS };

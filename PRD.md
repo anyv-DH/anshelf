@@ -4,26 +4,27 @@
 2026-10-15：用户明确授权完成修复后自动提交、推送并发布新版到现有 GitHub 仓库 `anyv-DH/anshelf`，随后更新桌面快捷方式。素材库和备份不进入公开仓库。
 
 ## Core requirements
+- 0.3.7：点击「用 AN 打开」直接打开素材库内该素材唯一的受管理 FLA，不创建逐次工作副本。首次打开将现有文件原位改名为安全、可读的素材名；保存后在下次打开或发送到舞台时重算哈希、更新素材记录并重生成预览。舞台粘贴也直接校验并打开这份唯一文件，不整体读入内存或写入临时 FLA；若该文件已在 AN 打开则提示先关闭，避免改动正在编辑的素材。外部最初导入文件保持不变。CEP 请求升级至版本 2，旧面板必须更新后才能粘贴。
 - 0.3.6：重复启动便携版只唤起已有窗口，不得破坏正在运行的程序文件；随后导入或重试 FLA 仍能生成并显示预览。每次启动使用独立解压目录，素材库继续使用原位置。
-- 0.3.4：“用 AN 打开”创建独立工作目录，文件仍用素材名称，例如“都市人物_女主角.fla”；同名素材、重复或并发打开各自隔离，不覆盖先前工作副本。
+- 0.3.4（由 0.3.7 替代）：“用 AN 打开”曾创建独立工作目录；不再适用于当前行为。
 - 0.3.4：选中素材后，“选择分类”替换原分类；“加入其他分类”保留已有分类，把同一素材加入其他兼容文件夹。多个分类共享一个素材和预览，计数/搜索/收藏/子文件夹过滤识别全部归属；详情中点击分类 × 只取消该分类，支持撤销和重开。
-- 0.3.5：导入、生成/重试预览均完全离线，不检查、不启动 Animate，避免小文件导入完成后又弹出 AN。只有用户明确「用 AN 打开」才打开工作副本；舞台粘贴继续由已打开的 AN 接收面板处理。预览排队后导入立即返回，失败不阻断其他素材。
+- 0.3.5：导入、生成/重试预览均完全离线，不检查、不启动 Animate，避免小文件导入完成后又弹出 AN。只有用户明确「用 AN 打开」才启动 Animate；舞台粘贴继续由已打开的 AN 接收面板处理。预览排队后导入立即返回，失败不阻断其他素材。
 - 0.3.5：经典旋转补间按元件变换中心插值位置，修复偏离注册原点的原地旋转变成绕圈漂移；保留素材原本的位移、缩放和旋转，不逐帧强制居中。
 - Import .fla files and folders, preserve originals, deduplicate identical bytes, and retain source paths.
 - Import dialog has “优先使用同名预览图” enabled by default. Matching same-stem PNG/JPG/JPEG/WebP is reused; otherwise previews are automatically generated and cached. Disable to force regeneration. Failed previews can retry.
 - Categories, favorites, tags, search, multi-select, instant category assignment and undo. Categories are metadata; originals are never moved.
 - Each FLA is one material unit. Insert the complete source scenes/timelines into the current AN document, preserving editable objects where native Animate supports them. Duplicate library symbols are folded into one hash-namespaced group; same name with different content remains separate.
-- “发送到 AN” queues selected asset; AN CEP panel confirms and “粘贴到舞台” inserts it into the current target. No source overwrite or target auto-save.
-- 插入舞台中央、目标当前图层、播放头准确所在帧。延续帧转普通关键帧，继承原内容后追加；已有关键帧直接追加。不新增目标层，不打空白关键帧，不自动保存目标。临时源副本关闭，目标保持打开。
+- “发送到 AN” queues the current managed FLA; AN CEP panel confirms and “粘贴到舞台” inserts it into the current target. No external source overwrite or target auto-save.
+- 插入舞台中央、目标当前图层、播放头准确所在帧。延续帧转普通关键帧，继承原内容后追加；已有关键帧直接追加。不新增目标层，不打空白关键帧，不自动保存目标。素材库源文档不保存并关闭，目标保持打开。
 - 0.2：暗色/暖色主题保存本机偏好；自定义标题栏与主题一致，排序采用主题菜单。常规与 930×700 置顶小窗均可使用。
-- 详情默认隐藏，按需打开/关闭。点击预览图放大查看；每卡片有“用 AN 打开”（管理器副本）和“粘贴到舞台”（排队到 AN 面板确认）。
+- 详情默认隐藏，按需打开/关闭。点击预览图放大查看；每卡片有“用 AN 打开”（素材库唯一管理文件）和“粘贴到舞台”（排队到 AN 面板确认）。
 - 层级分类，例如人物→男、女；父类视图包含后代。拒绝不存在父级、循环和同父级重名。删除保留素材，直接素材未分类，子类提升到原父级（重名加序号），可撤销。
 - 收藏永久保留；收藏视图按素材已有的原分类路径自动提供筛选按钮，不另建收藏分类；没有原分类的素材进入“未分类”。点赞从点击起保留 24 小时，到期退出点赞视图，保留素材，且不显示收藏分类栏。分类操作随选中/操作状态出现，不常驻宽操作区。
-- 重命名继续沿用 AppData/AnShelf 和 appId，兼容既有 65 份素材。
+- 重命名继续沿用 AppData/AnShelf 和 appId，兼容既有素材库。AN 编辑只改素材库受管理文件；sourcePaths 中记录的外部原始文件不修改。
 - 左上角“安安”采用为本项目原创绘制的矢量字标，不嵌入第三方字体；暗色与暖色主题分别提供协调的双色渐变，保持产品名称可读与导航可用。
 - AN 内的 CEP 面板也命名为“安安素材管理器”，默认约 48×48、最低 40×40 内容区，仅保留一个粘贴按钮。窄面板显示图标，放大后显示状态文字；素材名称和错误详情由悬停提示提供，不常驻标志、路径或说明区。
 - 素材页顶部标题、导入、搜索与排序压紧上移，提高首屏素材数量。提供自动 / 每行 4、5、6 个的显示选择并保存本机偏好；正常主窗实际按所选列数展示，小窗或详情展开空间不足时减少列数，保证按钮可用且不横向滚动。
-- 素材卡片提供“打开文件所在位置”，在资源管理器选中仍存在的原始 FLA；多个原始来源时选择可用者，原位置不可用则定位素材库副本并说明。桌面端只接收已知素材 ID，不接收任意路径，原件不修改。
+- 素材卡片提供“打开文件所在位置”，在资源管理器选中仍存在的原始 FLA；多个原始来源时选择可用者，原位置不可用则定位素材库文件并说明。桌面端只接收已知素材 ID，不接收任意路径，外部原件不修改。
 - All processing local; no accounts, cloud, telemetry or semantic AI search.
 
 ### Import destinations and child-folder filtering

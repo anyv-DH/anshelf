@@ -72,8 +72,11 @@ async function main() {
     const opened = await app.evaluate(() => global.__anshelfOpened);
     assert.equal(path.basename(opened[0]), '都市人物_女主角.fla');
     assert.notEqual(opened[0], source); assert.deepEqual(await fs.readFile(opened[0]), original);
-    assert.equal(path.dirname(path.dirname(opened[0])), path.join(data, 'opened'));
-    checks.push('real UI open callback receives the meaningful protected working copy');
+    const savedAsset = (await snapshot()).assets.find(item => item.name === '都市人物_女主角');
+    assert.ok(savedAsset, 'the imported asset remains indexed after assignment and undo');
+    assert.equal(opened[0], path.join(data, 'assets', savedAsset.id, '都市人物_女主角.fla'));
+    assert.equal(path.dirname(path.dirname(opened[0])), path.join(data, 'assets'));
+    checks.push('real UI opens the single named managed FLA without creating a working copy');
     await page.locator('#selection-bar [data-action="toggle-add-categories"]').click();
     await page.screenshot({ path: path.join(output, 'add-to-category.png') });
     await app.close(); app = await launch(); page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message));

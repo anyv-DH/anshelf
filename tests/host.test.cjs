@@ -55,7 +55,7 @@ test('a sidecar validation exception does not stop the import preview queue', as
   assert.equal((await host.api.snapshot()).assets[0].previewOrigin, 'rendered');
 });
 
-test('opening an asset in Animate uses a separate editable copy and rejects invalid managed sources', async t => {
+test('opening an asset in Animate edits its single managed file and rejects invalid sources', async t => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-open-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const source = path.join(base, 'original.fla');
@@ -66,12 +66,13 @@ test('opening an asset in Animate uses a separate editable copy and rejects inva
   await host.queue.idle();
   const asset = host.library.snapshot().assets[0];
   assert.equal(await host.api.openInAnimate(asset.id), true);
-  assert.notEqual(opened[0], host.library.assetPath(asset.id));
-  assert.equal(path.dirname(path.dirname(opened[0])), path.join(host.root, 'opened'));
+  assert.equal(opened[0], host.library.assetPath(asset.id));
+  assert.equal(path.dirname(path.dirname(opened[0])), path.join(host.root, 'assets'));
   assert.equal(path.extname(opened[0]), '.fla');
   assert.equal(await fs.readFile(opened[0], 'utf8'), 'original-data');
   assert.notEqual(opened[0], source);
   assert.equal(await fs.readFile(source, 'utf8'), 'original-data');
+  await assert.rejects(fs.access(path.join(host.root, 'opened')), { code: 'ENOENT' });
   await assert.rejects(host.api.openInAnimate(source), /素材/);
   const record = host.library.state.assets[0];
   record.managedPath = '../original.fla';
@@ -87,7 +88,7 @@ test('opening an asset in Animate uses a separate editable copy and rejects inva
   assert.equal(opened.length, 1);
 });
 
-test('opening an asset in Animate keeps a safe meaningful basename while isolating concurrent copies', async t => {
+test('opening an asset in Animate keeps a safe basename and reuses one managed file for concurrent requests', async t => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-open-name-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const source = path.join(base, '都市人物_女主角.fla');
@@ -99,16 +100,16 @@ test('opening an asset in Animate keeps a safe meaningful basename while isolati
   await Promise.all([host.api.openInAnimate(asset.id), host.api.openInAnimate(asset.id)]);
   assert.equal(opened.length, 2);
   assert.match(path.basename(opened[0]), /^都市人物_女主角(?:-\d+)?\.fla$/);
-  assert.match(path.basename(opened[1]), /^都市人物_女主角(?:-\d+)?\.fla$/);
-  assert.notEqual(opened[0], opened[1]);
-  assert.equal(path.dirname(path.dirname(opened[0])), path.join(host.root, 'opened'));
-  assert.equal(path.dirname(path.dirname(opened[1])), path.join(host.root, 'opened'));
+  assert.equal(opened[1], opened[0]);
+  assert.equal(opened[0], host.library.assetPath(asset.id));
+  assert.equal(path.dirname(path.dirname(opened[0])), path.join(host.root, 'assets'));
   assert.equal(await fs.readFile(source, 'utf8'), 'original-data');
   assert.equal(await fs.readFile(opened[0], 'utf8'), 'original-data');
   await host.library.updateAsset(asset.id, { name: '../CON:*?' });
   await host.api.openInAnimate(asset.id);
+  assert.notEqual(opened[2], opened[0]);
   assert.ok(!/[<>:"/\\|?*]/.test(path.basename(opened[2])));
-  assert.equal(path.dirname(path.dirname(opened[2])), path.join(host.root, 'opened'));
+  assert.equal(opened[2], host.library.assetPath(asset.id));
   await host.queue.idle();
 });
 
@@ -154,25 +155,44 @@ test('sidecar-only and audio imports never request Animate startup', async t => 
   await host.queue.idle();
 });
 
-test('Animate saves only the opened copy while source and content-addressed bytes remain immutable', async t => {
+test('Animate saves update the managed asset, preview, and stage payload without opening extra copies', async t => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-editable-open-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const source = path.join(base, 'original.fla');
   await fs.writeFile(source, 'original-bytes');
   const opened = [];
-  const host = await createHost({ root: path.join(base, 'library'), render: async () => ({ previewPath: null }), openInAnimate: async file => { opened.push(file); await fs.writeFile(file, 'saved-in-animate'); return true; } });
+  const libraryRoot = path.join(base, 'library');
+  const host = await createHost({ root: libraryRoot, render: async asset => {
+    const previewPath = `previews/${asset.hash}.png`;
+    await fs.writeFile(path.join(libraryRoot, previewPath), 'preview');
+    return { previewPath, width: 64, height: 64, frames: 1 };
+  }, openInAnimate: async file => { opened.push(file); return true; } });
   await host.api.importPaths([source]);
   await host.queue.idle();
   const asset = host.library.snapshot().assets[0];
   await host.api.openInAnimate(asset.id);
+  const initialFile = host.library.assetPath(asset.id);
+  await fs.writeFile(initialFile, 'saved-in-animate');
   await host.api.openInAnimate(asset.id);
-  assert.notEqual(opened[0], opened[1]);
-  assert.equal(await fs.readFile(opened[0], 'utf8'), 'saved-in-animate');
-  assert.equal(await fs.readFile(opened[1], 'utf8'), 'saved-in-animate');
+  assert.equal(opened[0], opened[1]);
+  const updated = host.library.getAsset(asset.id);
+  assert.notEqual(updated.hash, asset.hash);
+  assert.equal(await fs.readFile(host.library.assetPath(asset.id), 'utf8'), 'saved-in-animate');
+  assert.deepEqual(await fs.readdir(path.join(host.root, 'assets')), [asset.id]);
+  assert.deepEqual(await fs.readdir(path.dirname(host.library.assetPath(asset.id))), ['original.fla']);
+  assert.equal(updated.previewStatus, 'pending');
+  await host.queue.idle();
+  assert.equal(host.library.getAsset(asset.id).previewStatus, 'ready');
   assert.equal(await fs.readFile(source, 'utf8'), 'original-bytes');
-  assert.equal(await fs.readFile(host.library.assetPath(asset.id), 'utf8'), 'original-bytes');
-  assert.equal(host.library.getAsset(asset.id).hash, asset.hash);
-  assert.equal((await host.api.send(asset.id)).asset.hash, asset.hash);
+  const reopenedFiles = [];
+  const reopenedHost = await createHost({ root: libraryRoot, render: async () => ({ previewPath: null }), openInAnimate: async file => { reopenedFiles.push(file); return true; } });
+  await reopenedHost.api.openInAnimate(asset.id);
+  assert.equal(reopenedFiles[0], opened[0]);
+  assert.equal(await fs.readFile(reopenedFiles[0], 'utf8'), 'saved-in-animate');
+  assert.equal((await reopenedHost.api.send(asset.id)).asset.hash, updated.hash);
+  assert.equal((await reopenedHost.api.send(asset.id)).asset.sourcePath, reopenedHost.library.assetPath(asset.id));
+  assert.equal(await fs.readFile(initialFile, 'utf8'), 'saved-in-animate');
+  await assert.rejects(fs.access(path.join(host.root, 'opened')), { code: 'ENOENT' });
 });
 
 test('reveals an existing original FLA before falling back to the managed copy', async t => {
@@ -323,7 +343,7 @@ test('revealInFolder reports unavailable native capability and propagates native
   await assert.rejects(failing.api.revealInFolder(failing.library.snapshot().assets[0].id), /Explorer failed/);
 });
 
-test('an opened-copy directory link cannot redirect Animate copies outside the library', async t => {
+test('a linked managed edit directory cannot redirect Animate outside the library', async t => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-open-link-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const source = path.join(base, 'original.fla'), outside = path.join(base, 'outside');
@@ -333,13 +353,14 @@ test('an opened-copy directory link cannot redirect Animate copies outside the l
   const host = await createHost({ root: path.join(base, 'library'), render: async () => ({ previewPath: null }), openInAnimate: async () => { opens++; return true; } });
   await host.api.importPaths([source]);
   await host.queue.idle();
-  await fs.symlink(outside, path.join(host.root, 'opened'), process.platform === 'win32' ? 'junction' : 'dir');
-  await assert.rejects(host.api.openInAnimate(host.library.snapshot().assets[0].id), /链接|路径/);
+  const asset = host.library.snapshot().assets[0];
+  await fs.symlink(outside, path.join(host.root, 'assets', asset.id), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(host.api.openInAnimate(asset.id), /链接|路径/);
   assert.equal(opens, 0);
   assert.deepEqual(await fs.readdir(outside), []);
 });
 
-test('concurrent first opens each keep a distinct editable copy', async t => {
+test('concurrent first opens all target the single managed file', async t => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-open-concurrent-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const source = path.join(base, 'original.fla');
@@ -350,7 +371,8 @@ test('concurrent first opens each keep a distinct editable copy', async t => {
   await host.queue.idle();
   const asset = host.library.snapshot().assets[0];
   await Promise.all(Array.from({ length: 8 }, () => host.api.openInAnimate(asset.id)));
-  assert.equal(new Set(opened).size, 8);
+  assert.equal(new Set(opened).size, 1);
+  assert.equal(opened[0], host.library.assetPath(asset.id));
   for (const file of opened) assert.equal(await fs.readFile(file, 'utf8'), 'original-bytes');
   assert.equal(await fs.readFile(host.library.assetPath(asset.id), 'utf8'), 'original-bytes');
 });

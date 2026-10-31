@@ -13,13 +13,12 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 48, height: 48 }, deviceScaleFactor: 2 });
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {
-      window.panelTest = { pending: null, response: null, heartbeatError: false, completed: [], cleaned: [], prepared: [] };
+      window.panelTest = { pending: null, response: null, heartbeatError: false, completed: [], prepared: [] };
       const queue = {
         heartbeat() { if (window.panelTest.heartbeatError) throw new Error('写入失败'); },
         pending() { return window.panelTest.pending; },
-        prepare(request) { window.panelTest.prepared.push(request.requestId); return { ...request, managedRoot: 'file:///managed', temporaryPath: 'managed/temp/asset.fla' }; },
-        complete(request, result) { window.panelTest.completed.push({ requestId: request.requestId, result }); if (window.panelTest.pending && window.panelTest.pending.requestId === request.requestId) window.panelTest.pending = null; },
-        cleanup(value) { window.panelTest.cleaned.push(value); }
+        prepare(request) { window.panelTest.prepared.push(request.requestId); return { ...request, managedRoot: 'file:///managed' }; },
+        complete(request, result) { window.panelTest.completed.push({ requestId: request.requestId, result }); if (window.panelTest.pending && window.panelTest.pending.requestId === request.requestId) window.panelTest.pending = null; }
       };
       window.__adobe_cep__ = { getSystemPath: () => '/extension', evalScript(code, callback) {
         if (!code.includes('AnShelfInsertWhole')) { callback('42'); return; }
@@ -64,7 +63,7 @@ async function main() {
 
     async function send(id) {
       await page.evaluate(value => {
-        window.panelTest.pending = { version: 1, requestId: value, asset: { id: value, name: '非常长的武器素材名称'.repeat(20) } };
+        window.panelTest.pending = { version: 2, requestId: value, asset: { id: value, name: '非常长的武器素材名称'.repeat(20) } };
         window.panelTest.tick();
       }, id);
     }
@@ -107,12 +106,12 @@ async function main() {
     await page.evaluate(() => { window.panelTest.heartbeatError = false; window.panelTest.tick(); });
     assert.equal(await button.textContent(), '粘贴到舞台');
     assert.equal(await button.isEnabled(), true);
-    const state = await page.evaluate(() => ({ completed: window.panelTest.completed.length, cleaned: window.panelTest.cleaned.length, prepared: window.panelTest.prepared.length }));
-    assert.deepEqual(state, { completed: 2, cleaned: 2, prepared: 2 });
+    const state = await page.evaluate(() => ({ completed: window.panelTest.completed.length, prepared: window.panelTest.prepared.length }));
+    assert.deepEqual(state, { completed: 2, prepared: 2 });
     checks.push('failure, new request and connection recovery');
     await page.evaluate(() => {
       const createdAt = Date.now();
-      window.panelTest.pending = { version: 1, requestId: 'stage-drag', createdAt, delivery: 'stage-drop', expiresAt: createdAt + 5000, targetDocumentId: 42, asset: { id: 'stage-drag', name: '自动拖到舞台的武器' } };
+      window.panelTest.pending = { version: 2, requestId: 'stage-drag', createdAt, delivery: 'stage-drop', expiresAt: createdAt + 5000, targetDocumentId: 42, asset: { id: 'stage-drag', name: '自动拖到舞台的武器' } };
       window.panelTest.tick();
     });
     assert.equal(await button.textContent(), '正在粘贴…');

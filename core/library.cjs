@@ -197,6 +197,71 @@ class Library {
     return insidePath(this.root, findAsset(this.state, id).managedPath);
   }
 
+  async reconcileManagedFile(id, filename = null) {
+    let moved = null;
+    let duplicatePath = null;
+    let result;
+    try {
+      result = await this.change(async state => {
+        const asset = findAsset(state, id);
+        if (asset.kind === 'audio') throw new Error('音频素材不能在 AN 中编辑');
+        const current = insidePath(this.root, asset.managedPath);
+        const stat = await fs.lstat(current);
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('素材文件不是安全的普通文件');
+        const actualHash = await sha256(current);
+        let targetRelative = asset.managedPath;
+        if (filename !== null) {
+          if (typeof filename !== 'string' || filename !== path.basename(filename) || path.extname(filename).toLowerCase() !== '.fla') throw new Error('AN 文件名无效');
+          if (typeof asset.id !== 'string' || !/^[\w-]{1,128}$/.test(asset.id)) throw new Error('素材 ID 无法用于安全文件路径');
+          targetRelative = path.join('assets', asset.id, filename);
+        }
+
+        let pathChanged = false;
+        if (targetRelative !== asset.managedPath) {
+          const target = insidePath(this.root, targetRelative);
+          const assetsDirectory = path.join(this.root, 'assets');
+          const assetsStat = await fs.lstat(assetsDirectory);
+          if (!assetsStat.isDirectory() || assetsStat.isSymbolicLink()) throw new Error('素材库文件夹包含链接或路径无效');
+          const assetDirectory = path.dirname(target);
+          try { await fs.mkdir(assetDirectory); }
+          catch (error) { if (error.code !== 'EEXIST') throw error; }
+          const directoryStat = await fs.lstat(assetDirectory);
+          if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || path.dirname(await fs.realpath(assetDirectory)) !== await fs.realpath(assetsDirectory)) throw new Error('素材工作文件夹包含链接或路径无效');
+
+          try {
+            const targetStat = await fs.lstat(target);
+            if (!targetStat.isFile() || targetStat.isSymbolicLink() || await sha256(target) !== actualHash) throw new Error('同名素材文件已存在且内容不一致');
+            duplicatePath = current;
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+            await fs.rename(current, target);
+            moved = { from: current, to: target };
+          }
+          asset.managedPath = targetRelative;
+          pathChanged = true;
+        }
+
+        const contentChanged = actualHash !== asset.hash;
+        if (contentChanged) {
+          Object.assign(asset, {
+            hash: actualHash, previewPath: null, previewPosterPath: null,
+            previewStatus: 'pending', previewError: null, previewOrigin: null,
+            previewFormat: null, previewAnimated: false, previewWarning: null,
+            previewFrameCount: null, previewDurationMs: null,
+            width: null, height: null, frames: null, frameRate: null,
+            scene: null, frame: null, previewRevision: randomUUID()
+          });
+        }
+        return { asset: assetSnapshot(asset), contentChanged, pathChanged, diskHash: actualHash };
+      }, false);
+    } catch (error) {
+      if (moved) await fs.rename(moved.to, moved.from).catch(() => {});
+      throw error;
+    }
+    if (duplicatePath) await fs.rm(duplicatePath, { force: true }).catch(() => {});
+    return result;
+  }
+
   previewPath(id) {
     const asset = findAsset(this.state, id);
     return asset.previewPath ? insidePath(this.root, asset.previewPath) : null;

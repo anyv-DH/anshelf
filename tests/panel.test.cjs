@@ -9,13 +9,12 @@ function panel({ connected = true } = {}) {
   const button = { disabled: true, textContent: '', title: '', attrs: {}, setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(event, handler) { this.click = handler; } };
   let pending = null, response, tick, heartbeatError = false;
   const calls = [], completed = [], cleaned = [];
-  const request = id => ({ version: 1, requestId: id, managedRoot: 'managed', asset: { id, name: '一个名字很长的武器素材', hash: 'a'.repeat(64), sourcePath: 'managed/assets/test.fla' } });
+  const request = id => ({ version: 2, requestId: id, managedRoot: 'managed', asset: { id, name: '一个名字很长的武器素材', hash: 'a'.repeat(64), sourcePath: 'managed/assets/test.fla' } });
   const queue = {
     heartbeat(busy) { calls.push(['heartbeat', busy]); if (heartbeatError) throw new Error('写入失败'); },
     pending() { return pending; },
-    prepare(value) { calls.push(['prepare', value.requestId]); return { ...value, temporaryPath: 'managed/bridge/temp/test.fla', managedRoot: 'file:///managed' }; },
+    prepare(value) { calls.push(['prepare', value.requestId]); return { ...value, managedRoot: 'file:///managed' }; },
     complete(value, result) { completed.push([value.requestId, result]); if (pending && pending.requestId === value.requestId) pending = null; },
-    cleanup(value) { cleaned.push(value); },
   };
   const receiver = { Queue: function () { return queue; }, localURI: value => 'file:///' + value };
   const cep = { getSystemPath: () => '/extension', evalScript(code, callback) {
@@ -64,7 +63,7 @@ test('one CEP button carries waiting, request, busy, completion and next request
   assert.equal(view.button.textContent, '已粘贴 ✓');
   assert.match(view.button.title, /保留提示/);
   assert.equal(view.completed.length, 1);
-  assert.equal(view.cleaned.length, 1);
+  assert.equal(view.cleaned.length, 0);
   view.tick();
   assert.equal(view.button.textContent, '已粘贴 ✓');
   view.send('second');

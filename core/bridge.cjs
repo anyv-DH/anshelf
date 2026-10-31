@@ -47,7 +47,7 @@ function readJson(file) {
     rejectLinks(file);
     if (fs.statSync(file).size > 1024 * 1024) return null;
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return value && typeof value === 'object' && !Array.isArray(value) && value.version === 1 ? value : null;
+    return value && typeof value === 'object' && !Array.isArray(value) && [1, 2].includes(value.version) ? value : null;
   } catch { return null; }
 }
 
@@ -75,10 +75,11 @@ class Bridge {
     if (path.extname(sourcePath).toLowerCase() !== '.fla') throw new Error('只能发送 FLA 素材');
     const previewPath = asset.previewPath ? resolveManagedPath(this.root, asset.previewPath, 'previews') : null;
     const request = {
-      version: 1, requestId: crypto.randomUUID(), createdAt: Date.now(), managedRoot: this.root,
+      version: 2, requestId: crypto.randomUUID(), createdAt: Date.now(), managedRoot: this.root,
       asset: { id: asset.id, hash: asset.hash, name: asset.name.trim(), sourcePath, previewPath }
     };
     const receiver = this.status();
+    if (receiver.connected && receiver.heartbeat.capabilities?.directSource !== 1) throw new Error('请重新安装最新版安安素材管理器 AN 面板，当前面板会额外创建临时素材副本');
     if (receiver.connected && receiver.heartbeat.busy) throw new Error('AN 正在插入，请等待完成后再发送');
     if (stageTarget !== null) {
       if (!stageTarget || typeof stageTarget !== 'object' || !Number.isSafeInteger(stageTarget.documentId) || stageTarget.documentId < 0

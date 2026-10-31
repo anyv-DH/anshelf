@@ -13,7 +13,7 @@ const HASH = 'a'.repeat(64);
 test('stage drop binds a short-lived request to a ready receiver and never replaces pending on rejected targets', t => {
   const {root,asset,bridge}=fixture(t);
   const statusFile=path.join(root,'bridge/status.json');
-  const heartbeat={version:1,updatedAt:Date.now(),app:'Animate',busy:false,documentId:42,pid:123,capabilities:{stageDrop:1}};
+  const heartbeat={version:1,updatedAt:Date.now(),app:'Animate',busy:false,documentId:42,pid:123,capabilities:{stageDrop:1,directSource:1}};
   const target={documentId:42,pid:123,hwnd:'456'};
   const manual=bridge.send(asset);
   assert.throws(()=>bridge.sendStageDrop(asset,target),/连接|就绪/);
@@ -45,7 +45,7 @@ test('send persists a versioned request with canonical paths and clears obsolete
   fs.writeFileSync(path.join(root, 'bridge/result.json'), JSON.stringify({ version: 1, ok: true }));
   const request = bridge.send(asset);
   const stored = JSON.parse(fs.readFileSync(path.join(root, 'bridge/pending.json'), 'utf8'));
-  assert.equal(stored.version, 1);
+  assert.equal(stored.version, 2);
   assert.equal(stored.requestId, request.requestId);
   assert.equal(stored.asset.sourcePath, path.join(root, 'assets', `${HASH}.fla`));
   assert.equal(stored.managedRoot, root);
@@ -83,7 +83,7 @@ test('connection expires with the heartbeat and clear preserves receiver heartbe
   assert.equal(bridge.status().connected, false);
 });
 
-test('CEP receiver verifies bytes, stages a separate copy and only clears the completed request', t => {
+test('CEP receiver verifies the managed FLA in bounded memory without staging a copy', t => {
   const { Queue } = require('../plugin/queue.cjs');
   const { root, asset, bridge } = fixture(t);
   const receiver = new Queue(root);
@@ -92,15 +92,40 @@ test('CEP receiver verifies bytes, stages a separate copy and only clears the co
   receiver.heartbeat(false);
   assert.equal(bridge.status().connected, true);
   assert.equal(receiver.pending().requestId, request.requestId);
-  const prepared = receiver.prepare(request);
-  assert.notEqual(prepared.temporaryURI, prepared.asset.sourceURI);
-  assert.equal(fs.readFileSync(prepared.temporaryPath, 'utf8'), 'fixture');
+  const sourcePath = request.asset.sourcePath;
+  const readFileSync = fs.readFileSync;
+  let prepared;
+  fs.readFileSync = function (file, ...args) {
+    assert.notEqual(path.resolve(file), path.resolve(sourcePath), 'the FLA must not be read into one large Buffer');
+    return readFileSync.call(this, file, ...args);
+  };
+  try { prepared = receiver.prepare(request); }
+  finally { fs.readFileSync = readFileSync; }
+  assert.equal(prepared.asset.sourceURI, require('../plugin/queue.cjs').localURI(request.asset.sourcePath));
+  assert.equal(prepared.version, 2);
+  assert.equal(prepared.temporaryURI, undefined);
+  assert.equal(prepared.temporaryPath, undefined);
+  assert.equal(fs.existsSync(path.join(root, 'bridge/temp')), false);
   const newer = bridge.send({ ...asset, hash });
   receiver.complete(request, { ok: true });
   assert.equal(bridge.status().pending.requestId, newer.requestId);
-  receiver.cleanup(prepared.temporaryPath);
-  assert.equal(fs.existsSync(prepared.temporaryPath), false);
   assert.equal(fs.readFileSync(path.join(root, asset.managedPath), 'utf8'), 'fixture');
+});
+
+test('connected legacy CEP receiver is rejected before a request can be stranded', t => {
+  const { root, asset, bridge } = fixture(t);
+  fs.writeFileSync(path.join(root, 'bridge/status.json'), JSON.stringify({ version: 1, updatedAt: Date.now(), app: 'Animate', busy: false, capabilities: { stageDrop: 1 } }));
+  assert.throws(() => bridge.send(asset), /更新|新版本|副本/i);
+  assert.equal(bridge.status().pending, null);
+});
+
+test('new CEP receiver clears an obsolete copy-based request before accepting work', t => {
+  const { Queue } = require('../plugin/queue.cjs');
+  const { root } = fixture(t);
+  const receiver = new Queue(root);
+  receiver.atomic('pending.json', { version: 1, requestId: 'legacy-copy-request' });
+  assert.equal(receiver.pending(), null);
+  assert.equal(fs.existsSync(path.join(root, 'bridge/pending.json')), false);
 });
 
 test('CEP receiver refuses tampered bytes and symbolic-link paths', t => {
@@ -289,9 +314,13 @@ function fakeAnimate() {
   const fl = { getDocumentDOM: () => active, setActiveWindow: doc => { active = doc; }, openDocument: () => { events.push('open-source'); active = source; return source; } };
   const context = vm.createContext({ fl, FLfile: { exists: () => true }, JSON, decodeURIComponent, encodeURIComponent, Error, String, Math, RegExp });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../plugin/insert-whole.jsfl'), 'utf8'), context);
-  const request = { version: 1, requestId: 'request-one', managedRoot: 'file:///C|/library/', asset: { id: 'weapon', hash: HASH, name: '武器', sourceURI: `file:///C|/library/assets/${HASH}.fla` }, temporaryURI: 'file:///C|/library/bridge/temp/request-one.fla' };
-  source.pathURI = request.temporaryURI;
-  return { target, source, events, request, context, active: () => active };
+  const request = { version: 2, requestId: 'request-one', managedRoot: 'file:///C|/library/', asset: { id: 'weapon', hash: HASH, name: '武器', sourceURI: `file:///C|/library/assets/${HASH}.fla` } };
+  source.pathURI = request.asset.sourceURI;
+  const documents = [target];
+  fl.documents = documents;
+  fl.openDocument = uri => { events.push('open-source'); assert.equal(uri, request.asset.sourceURI); documents.push(source); active = source; return source; };
+  source.close = save => { assert.equal(save, false); source.closed = true; const index = documents.indexOf(source); if (index >= 0) documents.splice(index, 1); events.push('close-source'); };
+  return { target, source, events, request, context, fl, documents, active: () => active };
 }
 
 test('JSFL groups every scene and all frames under hash namespace, restores unsaved target, and reuses duplicates', () => {
@@ -345,7 +374,20 @@ test('JSFL rejects Animate returning the target document after source-open failu
   assert.equal(f.events.includes('paste-target'), false);
 });
 
-test('JSFL rejects a returned document whose path is not the requested temporary source', () => {
+test('JSFL refuses a managed source already open in Animate before modifying or closing that document', () => {
+  const f = fakeAnimate();
+  f.documents.push(f.source);
+  const before = JSON.stringify(f.source.library.items);
+  const result = JSON.parse(f.context.AnShelfInsertWhole(JSON.stringify(f.request), 'file:///C|/library/'));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /先关闭|已经打开|已打开/);
+  assert.equal(JSON.stringify(f.source.library.items), before);
+  assert.equal(f.source.closed, false);
+  assert.equal(f.events.includes('open-source'), false);
+  assert.equal(f.events.includes('paste-target'), false);
+});
+
+test('JSFL rejects a returned document whose path is not the requested managed source', () => {
   const f = fakeAnimate();
   f.source.pathURI = 'file:///C|/library/unrelated.fla';
   const before = JSON.stringify(f.source.library.items);
@@ -365,7 +407,7 @@ test('JSFL preserves scene coordinates and centers both new and reused root cont
   f.source.addOffset = { x: 75, y: -40 };
   f.target.addOffset = { x: 677.95, y: 305 };
   f.target.pasteOffset = { x: 80, y: -45 };
-  f.source.pathURI = f.request.temporaryURI.toUpperCase();
+  f.source.pathURI = f.request.asset.sourceURI.toUpperCase();
   const first = JSON.parse(f.context.AnShelfInsertWhole(JSON.stringify(f.request), 'file:///C|/library/'));
   assert.equal(first.ok, true, first.error);
   const root = f.target.library.items.find(item => item.name === `AnShelf/${HASH}/whole`);
@@ -488,7 +530,7 @@ test('JSFL exits nested editing into the existing scene and preserves its stage 
   assert.ok(second.layers[0].frames[1].elements.some(item => item.libraryItem && item.libraryItem.name === `AnShelf/${HASH}/whole`));
 });
 
-test('JSFL restores target and closes temporary source on timeline-copy failure', () => {
+test('JSFL restores target and closes managed source without saving on timeline-copy failure', () => {
   const f = fakeAnimate();
   f.source.timelines[1].copyLayers = () => { throw new Error('unsupported layer'); };
   const result = JSON.parse(f.context.AnShelfInsertWhole(JSON.stringify(f.request), 'file:///C|/library/'));

@@ -120,7 +120,7 @@ Annotate 'compact-grid.png' 'annotated-compact.png' {
 
 Annotate 'compact-grid.png' 'annotated-send-an.png' {
   param($g,$w,$h)
-  Add-Callout $g 1 '用 AN 打开副本' 250 412 20 500 230
+  Add-Callout $g 1 '直接用 AN 打开' 250 412 20 500 230
   Add-Callout $g 2 '粘贴到当前舞台' 335 412 430 500 250
   Add-Callout $g 3 '拖出素材到 AN' 310 300 430 280 220
 }

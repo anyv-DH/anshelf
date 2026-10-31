@@ -18,7 +18,7 @@ function fixture(t) {
   const sourcePath = path.join(root, 'assets', hash + '.fla');
   fs.writeFileSync(sourcePath, bytes);
   const queue = new Queue(root);
-  const manual = { version: 1, requestId: crypto.randomUUID(), createdAt: Date.now(), managedRoot: root, asset: { id: 'known', name: '武器', hash, sourcePath } };
+  const manual = { version: 2, requestId: crypto.randomUUID(), createdAt: Date.now(), managedRoot: root, asset: { id: 'known', name: '武器', hash, sourcePath } };
   function stage(patch = {}) { const createdAt = Date.now(); return { ...manual, requestId: crypto.randomUUID(), createdAt, delivery: 'stage-drop', expiresAt: createdAt + 5000, targetDocumentId: 42, ...patch }; }
   return { root, queue, manual, stage };
 }
@@ -50,7 +50,7 @@ test('receiver heartbeat advertises stage-drop capability and the current numeri
   const f = fixture(t);
   f.queue.heartbeat(false, 42);
   const status = f.queue.read('status.json');
-  assert.deepEqual(status.capabilities, { stageDrop: 1 });
+  assert.deepEqual(status.capabilities, { stageDrop: 1, directSource: 1 });
   assert.equal(status.documentId, 42);
   f.queue.heartbeat(true, null);
   assert.equal(f.queue.read('status.json').documentId, null);
@@ -159,7 +159,7 @@ test('queue carries the exact stage-drop document and time guards into the JSFL 
   assert.equal(prepared.createdAt, request.createdAt);
   assert.equal(prepared.expiresAt, request.expiresAt);
   assert.equal(prepared.targetDocumentId, 42);
-  f.queue.cleanup(prepared.temporaryPath);
+  assert.equal(prepared.temporaryPath, undefined);
   assert.equal(f.queue.prepare(f.manual).delivery, undefined);
 });
 
@@ -186,7 +186,7 @@ function jsflTarget(request, documentId) {
 
 function jsflRequest(patch = {}) {
   const createdAt = Date.now();
-  return { version: 1, requestId: 'stage-guard', createdAt, delivery: 'stage-drop', expiresAt: createdAt + 5000, targetDocumentId: 42, managedRoot: 'file:///C|/isolated/', temporaryURI: 'file:///C|/isolated/bridge/temp/test.fla', asset: { id: 'known', hash: 'a'.repeat(64), name: '武器', sourceURI: 'file:///C|/isolated/assets/test.fla' }, ...patch };
+  return { version: 2, requestId: 'stage-guard', createdAt, delivery: 'stage-drop', expiresAt: createdAt + 5000, targetDocumentId: 42, managedRoot: 'file:///C|/isolated/', asset: { id: 'known', hash: 'a'.repeat(64), name: '武器', sourceURI: 'file:///C|/isolated/assets/test.fla' }, ...patch };
 }
 
 test('JSFL checks active document identity before any timeline access, source open or target mutation', () => {

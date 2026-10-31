@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
-/** AnShelf guarded receiver. Only a validated managed FLA temporary copy is opened.
+/** AnShelf guarded receiver. Opens the one managed FLA directly and never stages a copy.
  * Native Animate compatibility is verified separately for each supported host.
  */
 function AnShelfInsertWhole(requestJson, trustedRootURI) {
@@ -16,6 +16,8 @@ function AnShelfInsertWhole(requestJson, trustedRootURI) {
         if (!activeTarget) throw new Error("请先打开要插入素材的 AN 文档");
         if (request.delivery === "stage-drop" && activeTarget.id !== request.targetDocumentId) throw new Error("拖拽目标文档已切换或关闭，请回到原文档重新拖入");
         target = activeTarget;
+        var rootItem = AnShelfFindItem(target.library, rootName);
+        if (!rootItem && AnShelfSourceIsOpen(request.asset.sourceURI)) throw new Error("素材文件已经在 AN 打开，请先关闭该素材文档再粘贴，避免改动当前编辑文档");
         var targetTimeline = AnShelfStageTimeline(target);
         oldLayer = targetTimeline.currentLayer;
         oldFrame = targetTimeline.currentFrame;
@@ -23,7 +25,6 @@ function AnShelfInsertWhole(requestJson, trustedRootURI) {
         var targetLayer = targetTimeline.layers[oldLayer];
         if (!targetLayer || targetLayer.locked || targetLayer.visible === false) throw new Error("当前图层已锁定或隐藏，请选择可编辑图层");
         if (targetLayer.layerType && targetLayer.layerType !== "normal") throw new Error("请选择普通图层插入素材");
-        var rootItem = AnShelfFindItem(target.library, rootName);
         if (rootItem) {
             AnShelfPrepareFrame(targetTimeline, oldLayer, oldFrame);
             target.selectNone();
@@ -35,9 +36,9 @@ function AnShelfInsertWhole(requestJson, trustedRootURI) {
             for (var q = 0; q < target.library.items.length; q++) {
                 if (target.library.items[q].name.indexOf(prefix + "/") === 0) throw new Error("目标库存在未完成的同素材导入，请先整理该素材命名空间");
             }
-            var openedSource = fl.openDocument(request.temporaryURI);
-            if (!openedSource || openedSource === target) throw new Error("无法打开素材 FLA 临时副本");
-            if (!openedSource.pathURI || AnShelfURI(openedSource.pathURI) !== AnShelfURI(request.temporaryURI)) throw new Error("AN 打开的文档不是请求的素材临时副本");
+            var openedSource = fl.openDocument(request.asset.sourceURI);
+            if (!openedSource || openedSource === target) throw new Error("无法直接打开素材库中的 FLA");
+            if (!openedSource.pathURI || AnShelfURI(openedSource.pathURI) !== AnShelfURI(request.asset.sourceURI)) throw new Error("AN 打开的文档不是素材库中的受管理 FLA");
             source = openedSource;
             AnShelfNamespaceLibrary(source.library, prefix + "/source");
             var scenes = AnShelfCollectScenes(source, prefix);
@@ -69,7 +70,7 @@ function AnShelfInsertWhole(requestJson, trustedRootURI) {
         result.error = String(error.message || error);
     } finally {
         if (source && source !== target) {
-            try { source.close(false); } catch (closeError) { result.warning = "素材临时文档未能关闭，请手动关闭且不要保存"; }
+            try { source.close(false); } catch (closeError) { result.warning = "素材源文档未能关闭，请手动关闭且不要保存"; }
         }
         if (target) {
             try {
@@ -89,6 +90,16 @@ function AnShelfStageTimeline(doc) {
         doc.exitEditMode();
     }
     throw new Error("无法退出元件编辑模式，请手动返回当前场景舞台再插入");
+}
+
+function AnShelfSourceIsOpen(sourceURI) {
+    if (!fl.documents || typeof fl.documents.length !== "number") throw new Error("无法确认素材是否已在 AN 打开，请重启新版 AN 面板后重试");
+    var expected = AnShelfURI(sourceURI);
+    for (var i = 0; i < fl.documents.length; i++) {
+        var document = fl.documents[i];
+        if (document && document.pathURI && AnShelfURI(document.pathURI) === expected) return true;
+    }
+    return false;
 }
 
 function AnShelfPrepareFrame(timeline, layer, frame) {
@@ -185,7 +196,7 @@ function AnShelfBuildRoot(doc, prefix, scenes) {
 }
 
 function AnShelfValidateRequest(request, trustedRootURI) {
-    if (!request || request.version !== 1 || !request.asset || !/^[A-Za-z0-9-]{1,80}$/.test(request.requestId || "")) throw new Error("无效的插入请求");
+    if (!request || request.version !== 2 || !request.asset || !/^[A-Za-z0-9-]{1,80}$/.test(request.requestId || "")) throw new Error("无效的插入请求");
     if (request.delivery !== undefined) {
         if (request.delivery !== "stage-drop" || typeof request.targetDocumentId !== "number" || !isFinite(request.targetDocumentId) || request.targetDocumentId < 0 || request.targetDocumentId > 9007199254740991 || Math.floor(request.targetDocumentId) !== request.targetDocumentId
             || typeof request.createdAt !== "number" || !isFinite(request.createdAt) || request.createdAt < 0 || Math.floor(request.createdAt) !== request.createdAt
@@ -196,9 +207,8 @@ function AnShelfValidateRequest(request, trustedRootURI) {
     if (!/^[a-f0-9]{64}$/.test(request.asset.hash || "")) throw new Error("无效的素材哈希");
     if (AnShelfURI(request.managedRoot) !== AnShelfURI(trustedRootURI)) throw new Error("素材库根目录不匹配");
     AnShelfRequireInside(request.asset.sourceURI, trustedRootURI, "assets/");
-    AnShelfRequireInside(request.temporaryURI, trustedRootURI, "bridge/temp/");
-    if (!/\.fla$/i.test(request.temporaryURI) || !/\.fla$/i.test(request.asset.sourceURI)) throw new Error("只能插入 FLA");
-    if (!FLfile.exists(request.temporaryURI)) throw new Error("素材临时副本不存在");
+    if (!/\.fla$/i.test(request.asset.sourceURI)) throw new Error("只能插入 FLA");
+    if (!FLfile.exists(request.asset.sourceURI)) throw new Error("素材库中的 FLA 不存在");
 }
 
 function AnShelfURI(value) {

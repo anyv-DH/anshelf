@@ -104,7 +104,7 @@
                 var error = pending.expiresAt <= now || pending.createdAt > now + 1000 ? '舞台拖拽请求已过期，请重新拖入' : pending.targetDocumentId !== documentId ? '拖拽目标文档已切换或关闭，请回到原文档重新拖入' : null;
                 if (error) {
                     busy = true;
-                    finish(pending, null, { ok: false, error: error });
+                    finish(pending, { ok: false, error: error });
                 } else insertWhole();
                 return;
             }
@@ -115,15 +115,12 @@
         }
     }
 
-    function finish(request, prepared, result) {
+    function finish(request, result) {
         if (!busy || !current || current.requestId !== request.requestId || lastCompleted === request.requestId) return;
         var description = '素材：' + assetName(request) + '。';
         try { queue.complete(request, result); } catch (error) { result = { ok: false, error: '结果写入失败：' + String(error.message || error) }; }
         description += result.ok ? '已粘贴到当前舞台。' : String(result.error || '粘贴未完成');
         if (result.warning) description += '\n' + result.warning;
-        if (prepared) {
-            try { queue.cleanup(prepared.temporaryPath); } catch (error) { description += '\n临时素材仍被 AN 占用，关闭素材临时文档后可清理。'; }
-        }
         busy = false;
         current = null;
         lastCompleted = request.requestId;
@@ -149,9 +146,9 @@
                     result = JSON.parse(response);
                     if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') throw new Error('无效的结果');
                 } catch (error) { result = { ok: false, error: 'AN 返回了无效结果，请检查目标舞台' }; }
-                finish(request, prepared, result);
+                finish(request, result);
             });
-        } catch (error) { finish(request, prepared, { ok: false, error: String(error.message || error) }); }
+        } catch (error) { finish(request, { ok: false, error: String(error.message || error) }); }
     }
 
     function dropFailure(error) {

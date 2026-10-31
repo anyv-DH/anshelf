@@ -16,7 +16,7 @@ function transfer(t) {
   const sourcePath = path.join(root, 'assets', `${hash}.fla`);
   fs.writeFileSync(sourcePath, bytes);
   const requestId = crypto.randomUUID(), createdAt = Date.now();
-  const request = { version: 1, requestId, createdAt, managedRoot: root, asset: { id: 'known', hash, name: '武器', sourcePath } };
+  const request = { version: 2, requestId, createdAt, managedRoot: root, asset: { id: 'known', hash, name: '武器', sourcePath } };
   const { Queue } = require('../plugin/queue.cjs');
   const queue = new Queue(root);
   queue.atomic('pending.json', request);
@@ -68,8 +68,8 @@ test('CEP requires an identical managed marker and rejects marker links', t => {
 function dropPanel() {
   const listeners = {}, calls = [], queue = { heartbeat() {}, pending() { return null; },
     acceptDrop(marker, name) { calls.push(['acceptDrop', marker, name]); if (marker.requestId !== 'current') throw new Error('拖拽已过期'); return { version: 1, requestId: 'current', asset: { name: '武器' } }; },
-    prepare(request) { calls.push(['prepare', request.requestId]); return { ...request, managedRoot: 'file:///managed', temporaryPath: 'managed/bridge/temp/current.fla' }; },
-    complete() {}, cleanup() {},
+    prepare(request) { calls.push(['prepare', request.requestId]); return { ...request, managedRoot: 'file:///managed' }; },
+    complete() {},
   };
   const button = { disabled: true, attrs: {}, setAttribute(name, value) { this.attrs[name] = value; }, addEventListener() {} };
   const document = { body: { addEventListener(name, handler) { listeners[name] = handler; } }, getElementById() { return button; } };

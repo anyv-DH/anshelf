@@ -1,5 +1,17 @@
 # Architecture
 
+## 0.3.9 shared storage, scoped removal and explicit updates
+
+`reconcileManagedFile` resolves both existing source and proposed target with the same `fs.realpath` implementation before treating either as a duplicate. Separator, Windows case and short-name aliases of one physical FLA update only metadata; they never enter payload rename/removal. Missing paths may recover only from the same asset ID directory through bounded candidate scanning; conflicting saved versions require human selection. No recovery copy is created. Legacy metadata undo restores user-editable fields only, preserving storage/hash/preview changes; deletion undo merges an independently reimported equivalent record and remaps older metadata history without allowing an old creation to delete the fresh record.
+
+`ui/removal.mjs` resolves the action scope before confirmation. A real category passes its subtree IDs to `removeFromCategories`, cancelling only those memberships atomically. The separate library removal uses `removeAssets`. Virtual views explicitly describe their global effect. A shared theme confirmation handles UI deletion, while the main-process confirmation broker binds copy confirmations to the current webContents and request ID; cancellation performs no persistent mutation.
+
+The CEP manifest defaults to 48×88 (40×80 minimum), with two vertical actions. The local themed confirmation temporarily requests 340×230 via CEP resize; if the host does not grant a readable size, the fixed JSFL entry uses native confirmation. Accepting the theme passes only the confirmed Document.id to fixed JSFL, which rejects a changed document before save. Closing the confirmation restores the original panel size; no extra idle timer is introduced.
+
+Plugin installation uses the runtime shipped outside ASAR and the existing signed-install transaction: fixed local source, hash checks, staged replacement and recoverable backup outside the extensions directory. Sender-checked IPC exposes status and installation; the renderer does not supply a source/destination path or executable. Completion requests a panel reopen or user-controlled Animate restart, never closes or saves host documents.
+
+Startup checking remains a single optional official metadata request. `update-download.cjs` runs only after the user requests download, fetches the fixed project's official release attachment for the detected installed/portable mode, validates HTTPS redirect hosts, streams into an exclusive `.part`, caps time/size and verifies exact length plus SHA256 before publication. `update-service.cjs` accepts only the internally remembered verified file, rechecks it before launching, and exposes cancellation and reveal. A bundled helper waits for manager exit and rechecks the hash before opening the installer or portable EXE. Downloads live in `%APPDATA%\AnShelfUpdates`; portable updates do not overwrite the previous executable/shortcut. The unchanged `%APPDATA%\AnShelf` owns user data. Closing cancels active checks/downloads; no recurring update daemon is installed.
+
 ## 0.3.7 edit managed FLA in place
 
 `openInAnimate` no longer creates `opened/<uuid>` copies. Before the first open, `Library.reconcileManagedFile` renames the existing content-addressed managed file to `assets/<asset-id>/<safe asset name>.fla` on the same volume, so no second FLA payload is written and Animate receives a readable filename. Repeated or concurrent opens target that one file. The external source path recorded at import remains untouched.

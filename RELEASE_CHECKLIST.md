@@ -1,5 +1,20 @@
 # Local release checklist
 
+## 0.3.9 release gates
+
+- [x] Version metadata and current README target 0.3.9, historical 0.3.8 release notes remain intact; Chinese download table includes installer/portable and optional standalone plugin.
+- [x] Shared-category/legacy undo/reimport identity regressions and Windows slash/case red-to-green reproduce the failure; reconciliation never renames or removes one physical file under aliases. Directed storage/category/recovery/copy/import suite 59/59 passes.
+- [x] Category UI distinguishes removal from the current subtree from explicit whole-library removal; themed copy/delete confirmations state their scope and allow cancellation/undo.
+- [x] CEP defaults 48×88/40×80 with vertical actions; theme confirmation binds the document, restores size and falls back to native confirmation for constrained docking. Panel/document 22/22 and browser 13 groups pass with zero page errors.
+- [x] Final signed runtime, PowerShell install regressions and Adobe verification after every plugin payload edit; in-app fixed-source installation status, cancel/error/reopen guidance and no host close/save/restart verified.
+- [x] Final main-update download/service/UI/helper checks: user click only, official mode-specific asset, streaming size/SHA256 validation, cancellation, launch-time recheck, installed wizard and persistent portable handoff; no old shortcut overwrite or startup download.
+- [x] Complete full regression 366/366, final packaged UI 42 groups and actual portable smoke 5 groups after all changes; no page errors or skips. Counts use 0.3.9 evidence.
+- [ ] Exact portable/installer source-byte and external-plugin audits, licenses, clean source ZIP, share-package CRC/SHA256, prominent Chinese instructions and final desktop shortcut/runtime checks.
+- [ ] Push reviewed source/tag, publish only project deliverables and verify official release/latest attachment sizes and SHA256; keep private assets, recovery data and signing keys out.
+- [ ] New complete 0.3.9 AN panel-to-manager/stage workflow, taskbar hover and Animate 2024 live validation remain explicitly unclaimed until observed in independent host documents.
+
+Release publication follows the session's existing user authorization. In-app installation uses the bundled signed plugin; only manually requested main updates download files. User data remains under `%APPDATA%\AnShelf`, downloaded executables under `%APPDATA%\AnShelfUpdates`, and old program/shortcut locations are preserved for portable users.
+
 ## 0.3.8 release gates
 
 - [x] Two explicit confirmations: copying cancels without index/preview/file changes; AN import cancels before saving or requesting import.

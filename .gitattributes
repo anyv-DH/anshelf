@@ -1,0 +1,3 @@
+# CEP verifies the exact signed bytes. Preserve them in source downloads and
+# Windows checkouts instead of applying automatic line-ending conversion.
+plugin/** -text whitespace=cr-at-eol

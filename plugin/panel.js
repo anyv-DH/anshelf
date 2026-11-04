@@ -3,10 +3,50 @@
     'use strict';
     var insert = document.getElementById('insert');
     var addCurrent = document.getElementById('add-current');
+    var addDialog = document.getElementById('add-confirm'), confirmSave = document.getElementById('confirm-save'), confirmCancel = document.getElementById('confirm-cancel');
     var queue, path, localURI, extension, api = window.__adobe_cep__;
     var current = null, busy = false, dropping = false, connected = false, timer = null, lastCompleted = null, lastResult = null;
     var documentId = null, contextKnown = false, probing = false, unloaded = false;
     var adding = false, addRequest = null, addStarted = 0, addGeneration = 0;
+    var confirmation = null, confirmTimer = null;
+
+    function closeConfirmation() {
+        if (confirmTimer) window.clearTimeout(confirmTimer);
+        confirmTimer = null;
+        if (addDialog) addDialog.hidden = true;
+        var previous = confirmation;
+        confirmation = null;
+        if (previous && previous.resized) {
+            try { api.resizeContent(previous.width, previous.height); } catch (error) { /* AN owns docking geometry. */ }
+        }
+    }
+
+    function confirmCurrentDocument(generation) {
+        if (!addDialog || !confirmSave || !confirmCancel || documentId === null) return false;
+        var width = Number(window.innerWidth), height = Number(window.innerHeight);
+        if (!(width > 0 && height > 0)) return false;
+        if ((width < 280 || height < 200) && typeof api.resizeContent !== 'function') return false;
+        confirmation = { generation: generation, documentId: documentId, width: width, height: height, resized: false };
+        function show() {
+            if (unloaded || !adding || generation !== addGeneration || !confirmation) return;
+            if (window.innerWidth < 280 || window.innerHeight < 200) {
+                // Some docked AN panels cannot resize. Keep their native
+                // confirmation, never an unreadable dialog in a 48px column.
+                closeConfirmation();
+                saveCurrentDocument(generation, null);
+                return;
+            }
+            addDialog.hidden = false;
+            confirmCancel.focus();
+        }
+        if (width < 280 || height < 200) {
+            confirmation.resized = true;
+            try { api.resizeContent(340, 230); }
+            catch (error) { closeConfirmation(); return false; }
+            confirmTimer = window.setTimeout(show, 120);
+        } else show();
+        return true;
+    }
 
     function setAddButton(text, state, description, disabled) {
         if (!addCurrent) return;
@@ -18,6 +58,7 @@
     }
 
     function finishAdd(result) {
+        closeConfirmation();
         if (addRequest) {
             try { queue.clearDocumentImport(addRequest.requestId); } catch (error) { /* Result cleanup does not undo the import. */ }
         }
@@ -37,9 +78,16 @@
         setAddButton('等待确认…', 'busy', '请在 AN 中确认是否保存并加入素材库；取消不会保存或加入。', true);
         insert.disabled = true;
         heartbeat();
+        if (!confirmCurrentDocument(generation)) saveCurrentDocument(generation, null);
+    }
+
+    function saveCurrentDocument(generation, confirmedDocumentId) {
+        if (unloaded || !adding || generation !== addGeneration) return;
+        setAddButton(confirmedDocumentId === null ? '等待确认…' : '正在保存…', 'busy', '保存当前 AN 文档；取消保存就取消加入。', true);
         try {
             var scriptURI = localURI(path.join(extension, 'insert-whole.jsfl'));
-            var code = '(function(){try{return fl.runScript(' + JSON.stringify(scriptURI) + ',"AnShelfCurrentDocumentForLibrary");}catch(e){return "{\\"version\\":1,\\"ok\\":false,\\"error\\":\\"无法读取当前AN文档\\"}";}})();';
+            var confirmed = confirmedDocumentId === null ? '' : ',' + JSON.stringify(String(confirmedDocumentId));
+            var code = '(function(){try{return fl.runScript(' + JSON.stringify(scriptURI) + ',"AnShelfCurrentDocumentForLibrary"' + confirmed + ');}catch(e){return "{\\"version\\":1,\\"ok\\":false,\\"error\\":\\"无法读取当前AN文档\\"}";}})();';
             api.evalScript(code, function (response) {
                 if (unloaded || !adding || generation !== addGeneration) return;
                 try {
@@ -246,6 +294,23 @@
 
     insert.addEventListener('click', insertWhole);
     if (addCurrent) addCurrent.addEventListener('click', addCurrentDocument);
+    if (confirmCancel) confirmCancel.addEventListener('click', function () {
+        if (confirmation) finishAdd({ ok: false, cancelled: true });
+    });
+    if (confirmSave) confirmSave.addEventListener('click', function () {
+        if (!confirmation || unloaded || !adding || busy) return;
+        var accepted = confirmation;
+        closeConfirmation();
+        saveCurrentDocument(accepted.generation, accepted.documentId);
+    });
+    if (document.addEventListener) document.addEventListener('keydown', function (event) {
+        if (!confirmation || !addDialog || addDialog.hidden) return;
+        if (event.key === 'Escape' || event.keyCode === 27) { event.preventDefault(); finishAdd({ ok: false, cancelled: true }); }
+        else if (event.key === 'Tab' || event.keyCode === 9) {
+            event.preventDefault();
+            if (document.activeElement === confirmCancel) confirmSave.focus(); else confirmCancel.focus();
+        }
+    });
     if (document.body && document.body.addEventListener) {
         document.body.addEventListener('dragover', function (event) {
             event.preventDefault();
@@ -258,5 +323,5 @@
     poll();
     refreshContext();
     timer = setInterval(refreshContext, 1000);
-    window.addEventListener('unload', function () { unloaded = true; if (timer) clearInterval(timer); });
+    window.addEventListener('unload', function () { unloaded = true; if (timer) clearInterval(timer); if (confirmTimer) window.clearTimeout(confirmTimer); });
 }());

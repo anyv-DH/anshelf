@@ -1,10 +1,29 @@
 /* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
 const {contextBridge,ipcRenderer}=require('electron');
-const methods=['snapshot','sync','importFiles','importFolder','assignCategory','addToCategory','removeFromCategory','undo','createCategory','renameCategory','deleteCategory','setCategoryPinned','updateAsset','removeAssets','retryPreview','send','status','demo','compact','openPluginFolder','openInAnimate','revealInFolder','duplicateInFolder','setTheme','windowAction'];
+const methods=['snapshot','sync','importFiles','importFolder','assignCategory','addToCategory','removeFromCategory','removeFromCategories','undo','createCategory','renameCategory','deleteCategory','setCategoryPinned','updateAsset','removeAssets','retryPreview','send','status','demo','compact','openPluginFolder','openInAnimate','revealInFolder','duplicateInFolder','setTheme','windowAction'];
 const shelf=Object.fromEntries(methods.map(method=>[method,(...args)=>ipcRenderer.invoke('shelf:call',method,args)]));
+shelf.onConfirmRequest=listener=>{
+  if(typeof listener!=='function')throw new Error('确认回调无效');
+  const handler=(_event,payload)=>listener(payload);
+  ipcRenderer.on('shelf:confirm-request',handler);
+  return()=>ipcRenderer.removeListener('shelf:confirm-request',handler);
+};
+shelf.respondConfirm=(requestId,accepted)=>{if(typeof requestId==='string'&&typeof accepted==='boolean')ipcRenderer.send('shelf:confirm-response',requestId,accepted);};
 shelf.checkUpdates=options=>ipcRenderer.invoke('shelf:update-check',{manual:options?.manual===true});
 shelf.openUpdatePage=()=>ipcRenderer.invoke('shelf:update-open');
 shelf.openProjectPage=()=>ipcRenderer.invoke('shelf:project-open');
+shelf.pluginStatus=()=>ipcRenderer.invoke('shelf:plugin-status');
+shelf.installPlugin=()=>ipcRenderer.invoke('shelf:plugin-install');
+shelf.downloadUpdate=()=>ipcRenderer.invoke('shelf:update-download');
+shelf.cancelUpdateDownload=()=>ipcRenderer.invoke('shelf:update-cancel');
+shelf.launchUpdate=()=>ipcRenderer.invoke('shelf:update-launch');
+shelf.revealDownloadedUpdate=()=>ipcRenderer.invoke('shelf:update-reveal');
+shelf.onUpdateProgress=listener=>{
+  if(typeof listener!=='function')throw new Error('更新进度回调无效');
+  const handler=(_event,progress)=>listener(progress);
+  ipcRenderer.on('shelf:update-progress',handler);
+  return()=>ipcRenderer.removeListener('shelf:update-progress',handler);
+};
 shelf.onWindowActivity=listener=>{
   if(typeof listener!=='function')throw new Error('窗口状态回调无效');
   const handler=(_event,active)=>listener(active===true);

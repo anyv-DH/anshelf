@@ -8,13 +8,27 @@ import { mountPreviewViewer } from './preview-viewer.mjs';
 import { createAudioController, formatTime } from './audio-controller.mjs';
 import { mountStageDrag } from './stage-drag.mjs';
 import { mountSkin } from './skin.mjs';
+import { planRemoval } from './removal.mjs';
+import { createConfirmation } from './confirmation.mjs';
+import { mountPluginControls } from './plugin-controls.mjs';
+import { mountUpdateDownloadControls } from './update-download-controls.mjs';
 
 const state = { snapshot: { assets: [], categories: [], queue: {}, bridge: {} }, category: 'all', favoriteCategory: 'all', typeScope: 'all', query: '', categoryQuery: '', collapsedCategories: new Set(), sort: 'newest', density: 'auto', hideChildCategories: false, importMode: 'ordinary', importCategoryId: undefined, selected: new Set(), anchor: null, detail: null, inspectorOpen: false, quickCategories: false, busy: false, visible: [], receivedSnapshot: false };
 let toastTimer, disposeViewer, seekingAudio = false, syncVersion, refreshPromise, refreshTimer, refreshStopped = false;
-let updateTimer, updatePromise, updateResult = { currentVersion: '0.3.8', status: 'idle' }, checkUpdatesOnStart = true;
+let updateTimer, updatePromise, updateResult = { currentVersion: '0.3.9', status: 'idle' }, checkUpdatesOnStart = true;
 const $ = selector => document.querySelector(selector);
 const audio = createAudioController({ onChange: updateAudioUI });
 const skinControls = mountSkin({ api: window.shelf, document });
+const confirmation = createConfirmation({ document });
+const pluginControls = mountPluginControls({ document, api: window.shelf, confirm: options => confirmation.ask(options) });
+const downloadControls = mountUpdateDownloadControls({ document, api: window.shelf, confirm: options => confirmation.ask(options), getUpdate: () => updateResult });
+const unsubscribeConfirm = window.shelf?.onConfirmRequest?.(async request => {
+  let accepted = false;
+  try { accepted = await confirmation.ask(request); }
+  finally {
+    try { await window.shelf.respondConfirm(request.requestId, accepted); } catch { /* closing the window cancels host confirmations */ }
+  }
+});
 
 function updateAudioUI() {
   const playback = audio.state(), player = $('#audio-player');
@@ -100,7 +114,7 @@ async function pollRefresh() {
   clearTimeout(refreshTimer); refreshTimer = setTimeout(pollRefresh, delay);
 }
 async function run(method, ...args) {
-  if (['assignCategory', 'addToCategory', 'removeFromCategory', 'createCategory', 'renameCategory', 'deleteCategory', 'updateAsset', 'removeAssets', 'setCategoryPinned'].includes(method)) clearUndoToast();
+  if (['assignCategory', 'addToCategory', 'removeFromCategory', 'removeFromCategories', 'createCategory', 'renameCategory', 'deleteCategory', 'updateAsset', 'removeAssets', 'setCategoryPinned'].includes(method)) clearUndoToast();
   busy(true);
   try { return await call(method, ...args); }
   catch (error) { errorToast(error); throw error; }
@@ -119,7 +133,7 @@ function openPreview(id) {
 function renderUpdateBadge() {
   const button = $('#app-update'), available = updateResult.status === 'available';
   button.dataset.state = available ? 'available' : updateResult.status;
-  $('#app-update-label').textContent = available ? `发现新版 ${updateResult.latestVersion || ''}` : `v${updateResult.currentVersion || '0.3.8'} · 检查更新`;
+  $('#app-update-label').textContent = available ? `发现新版 ${updateResult.latestVersion || ''}` : `v${updateResult.currentVersion || '0.3.9'} · 检查更新`;
   button.title = available ? `有新版 ${updateResult.latestVersion}，点击查看下载和更新方法` : '检查安安素材管理器的新版本';
 }
 function renderUpdateDialog() {
@@ -133,10 +147,11 @@ function renderUpdateDialog() {
     : ['暂时无法检查新版', '网络暂不可用，稍后可重试；本地素材和日常使用不受影响。'];
   $('#update-status').dataset.state = status;
   $('#update-status').innerHTML = `<strong>${e(copy[0])}</strong><p>${e(copy[1])}</p>`;
-  $('#update-current-version').textContent = `当前版本 v${updateResult.currentVersion || '0.3.8'}`;
+  $('#update-current-version').textContent = `当前版本 v${updateResult.currentVersion || '0.3.9'}`;
   const retry = panel.querySelector('[data-action="retry-update-check"]');
   retry.disabled = status === 'checking';
   retry.textContent = status === 'checking' ? '检查中…' : '重新检查';
+  downloadControls.refresh();
 }
 async function checkForUpdates(manual = false) {
   if (updateTimer) { clearTimeout(updateTimer); updateTimer = null; }
@@ -162,9 +177,10 @@ async function checkForUpdates(manual = false) {
 }
 function openUpdateDialog() {
   closeDialog();
-  $('#dialog-content').innerHTML = `<div id="update-panel"><div class="dialog-heading"><div><div class="eyebrow">安安素材管理器</div><h2 id="dialog-title">版本更新</h2></div><button class="icon-button" data-action="close-dialog" aria-label="关闭">${icon('close', 18)}</button></div><div class="update-meta"><div class="update-version" id="update-current-version"></div><span>作者：安屿动画</span></div><div id="update-status" class="update-status" role="status" aria-live="polite"></div><div class="update-guide"><strong>怎么更新？</strong><ol><li><b>安装版：</b>退出管理器，运行新版安装包，选择原来的安装位置；不用卸载旧版。</li><li><b>免安装版：</b>下载新版后直接打开；以后使用新版入口即可。</li><li>使用同一个 Windows 账号时，原有素材库和分类会保留。请不要删除素材库目录。</li><li>如果新版说明提到 AN 插件有变化，插件需要单独更新，完成后重启 AN。</li></ol></div><label class="update-preference"><input id="update-auto-check" type="checkbox"${checkUpdatesOnStart ? ' checked' : ''}><span>启动时检查新版<small>仅启动时检查一次，可随时关闭。</small></span></label><div class="update-actions"><button class="button secondary" data-action="retry-update-check">重新检查</button><button class="button primary" data-action="open-update-page">${icon('arrow', 15)}前往官方下载</button></div><p class="update-footnote">检查更新只读取官方版本信息，不上传素材，也不会自动下载安装。</p><div class="update-support"><button type="button" class="update-project-link" data-action="open-project-page" title="打开安安素材管理器的 GitHub 项目">https://github.com/anyv-DH/anshelf</button><p>如果安安素材管理器帮到了您，欢迎到 GitHub 点一颗 Star ⭐。愿您的灵感不断，视频条条爆火！谢谢您的支持。</p></div></div>`;
+  $('#dialog-content').innerHTML = `<div id="update-panel"><div class="dialog-heading"><div><div class="eyebrow">安安素材管理器</div><h2 id="dialog-title">版本更新</h2></div><button class="icon-button" data-action="close-dialog" aria-label="关闭">${icon('close', 18)}</button></div><div class="update-meta"><div class="update-version" id="update-current-version"></div><span>作者：安屿动画</span></div><div id="update-status" class="update-status" role="status" aria-live="polite"></div><div class="update-guide"><strong>怎么更新？</strong><ol><li><b>安装版：</b>退出管理器，运行新版安装包，选择原来的安装位置；不用卸载旧版。</li><li><b>免安装版：</b>下载新版后直接打开；以后使用新版入口即可。</li><li>使用同一个 Windows 账号时，原有素材库和分类会保留。请不要删除素材库目录。</li><li>AN 插件可在下方直接安装或单独更新，完成后关闭并重新打开 AN 面板。</li></ol></div><section data-plugin-panel aria-label="AN 插件安装与更新"></section><label class="update-preference"><input id="update-auto-check" type="checkbox"${checkUpdatesOnStart ? ' checked' : ''}><span>启动时检查新版<small>仅启动时检查一次，可随时关闭。</small></span></label><div data-update-download-controls></div><div class="update-actions"><button class="button secondary" data-action="retry-update-check">重新检查</button><button class="button primary" data-action="open-update-page">${icon('arrow', 15)}前往官方下载</button></div><p class="update-footnote">检查更新只读取官方版本信息，不上传素材，也不会自动下载安装。</p><div class="update-support"><button type="button" class="update-project-link" data-action="open-project-page" title="打开安安素材管理器的 GitHub 项目">https://github.com/anyv-DH/anshelf</button><p>如果安安素材管理器帮到了您，欢迎到 GitHub 点一颗 Star ⭐。愿您的灵感不断，视频条条爆火！谢谢您的支持。</p></div></div>`;
   $('#dialog').showModal();
   checkForUpdates(true);
+  pluginControls.refresh();
 }
 async function openUpdatePage() {
   try {
@@ -244,8 +260,9 @@ function syncCategoryScope() {
 function openBridgeDialog() {
   const bridge = state.snapshot.bridge || {};
   const latest = bridge.pending ? `待处理：${bridge.pending.asset?.name || '素材'} · 等待在 AN 面板确认插入` : bridge.result ? bridge.result.ok ? '上次操作：已粘贴到舞台' : `上次操作：${bridge.result.error || '插入未完成'}` : '';
-  $('#dialog-content').innerHTML = `<div class="dialog-heading"><div><div class="eyebrow">SEND A FRAME TO ANIMATE</div><h2 id="dialog-title">连接 Adobe Animate</h2></div><button class="icon-button" data-action="close-dialog" aria-label="关闭">${icon('close', 18)}</button></div><p class="dialog-copy">素材会从安安发送到 AN 接收面板，再由你确认粘贴到正在编辑的舞台。</p>${latest ? `<p class="bridge-latest">${e(latest)}</p>` : ''}<div class="bridge-steps"><div><span>1</span><p>安装软件随附的 AN 面板。<small>打开安装文件夹，按其中的说明完成安装。</small></p></div><div><span>2</span><p>在 Adobe Animate 中打开素材接收面板。<small>保持目标文档打开，将播放头放到想要的位置。</small></p></div><div><span>3</span><p>在素材卡片点击「粘贴到舞台」。<small>回到 AN 面板，点击「粘贴到舞台」。</small></p></div></div><p class="dialog-note">${icon('info', 14)} AN 未连接时，已发送素材会保留为待处理。</p><div class="dialog-actions"><button class="button secondary" data-action="close-dialog">知道了</button><button class="button primary" data-action="open-plugin-folder">${icon('folder', 16)}打开 AN 面板文件夹</button></div>`;
+  $('#dialog-content').innerHTML = `<div class="dialog-heading"><div><div class="eyebrow">SEND A FRAME TO ANIMATE</div><h2 id="dialog-title">连接 Adobe Animate</h2></div><button class="icon-button" data-action="close-dialog" aria-label="关闭">${icon('close', 18)}</button></div><p class="dialog-copy">素材会从安安发送到 AN 接收面板，再由你确认粘贴到正在编辑的舞台。</p>${latest ? `<p class="bridge-latest">${e(latest)}</p>` : ''}<div class="bridge-steps"><div><span>1</span><p>安装软件随附的 AN 面板。<small>打开安装文件夹，按其中的说明完成安装。</small></p></div><div><span>2</span><p>在 Adobe Animate 中打开素材接收面板。<small>保持目标文档打开，将播放头放到想要的位置。</small></p></div><div><span>3</span><p>在素材卡片点击「粘贴到舞台」。<small>回到 AN 面板，点击「粘贴到舞台」。</small></p></div></div><p class="dialog-note">${icon('info', 14)} AN 未连接时，已发送素材会保留为待处理。</p><section data-plugin-panel aria-label="AN 插件安装与更新"></section><div class="dialog-actions"><button class="button secondary" data-action="close-dialog">知道了</button><button class="button primary" data-action="open-plugin-folder">${icon('folder', 16)}打开 AN 面板文件夹</button></div>`;
   $('#dialog').showModal();
+  pluginControls.refresh();
 }
 
 async function importItems(method) {
@@ -278,7 +295,7 @@ async function saveCategory(id) {
 }
 async function deleteCategory(id) {
   const item = state.snapshot.categories.find(category => category.id === id);
-  if (!item || !window.confirm(`删除“${item.name}”？该分类中的素材会保留，子分类会提升到上一级。`)) return;
+  if (!item || !await confirmation.ask({ title: '删除分类', message: `您确定要删除“${item.name}”吗？\n该分类中的素材会保留，子分类会提升到上一级。\n原始文件不会被删除。`, confirmLabel: '确认删除分类', tone: 'danger' })) return;
   try { await run('deleteCategory', id); closeDialog(); if (state.category === id) state.category = 'all'; await refresh(); toast('分类已删除'); }
   catch { /* run already reported */ }
 }
@@ -299,13 +316,18 @@ async function removeFromCategory(id, categoryId) {
   catch { /* run already reported */ }
 }
 async function undoAssign() {
-  try { await run('undo'); await refresh(); toast('已撤销上次归类'); }
+  try { await run('undo'); await refresh(); toast('已撤销上次操作'); }
   catch { /* run already reported */ }
 }
-async function removeSelected() {
-  const selected = [...state.selected]; if (!selected.length) return;
-  if (!window.confirm(`从素材库移除 ${selected.length} 项？原始文件不会被删除。`)) return;
-  try { await run('removeAssets', selected); state.selected.clear(); state.detail = null; await refresh(false); toast(`已移除 ${selected.length} 项`); }
+async function removeSelected(fromLibrary = false) {
+  const plan = planRemoval(state, fromLibrary); if (!plan) return;
+  if (!await confirmation.ask({ title: plan.buttonLabel, message: plan.confirmation, confirmLabel: plan.scope === 'category' ? '确认移出分类' : '确认从素材库移除', tone: 'danger' })) return;
+  try {
+    await run(plan.method, ...plan.args);
+    state.selected.clear(); state.detail = null; state.quickCategories = false;
+    await refresh(); renderAll();
+    toast(plan.success, { action: 'undo-assign', label: '撤销' }, 5000);
+  }
   catch { /* run already reported */ }
 }
 async function updateField(input) {
@@ -476,6 +498,7 @@ async function action(event) {
   if (actionName === 'remove-from-category') return removeFromCategory(id, target.dataset.categoryId);
   if (actionName === 'undo-assign') return undoAssign();
   if (actionName === 'remove') return removeSelected();
+  if (actionName === 'remove-library') return removeSelected(true);
   if (actionName === 'favorite') { event.stopPropagation(); return toggleFavorite(id); }
   if (actionName === 'like') { event.stopPropagation(); return toggleLike(id); }
   if (actionName === 'retry') return run('retryPreview', id).then(() => refresh()).catch(() => {});
@@ -501,6 +524,7 @@ function selectCard(event) {
   $(`[data-asset="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); updateAudioUI();
 }
 function handleKey(event) {
+  if (confirmation.isOpen()) return;
   if (handleMenuKey(event)) return;
   if ($('#dialog').open) {
     if (event.key === 'Escape') return closeDialog();
@@ -597,7 +621,7 @@ let savedTheme = 'dark', savedDensity = 'auto';
 try { savedTheme = localStorage.getItem('anshelf-theme') || 'dark'; savedDensity = localStorage.getItem('anshelf-density') || 'auto'; checkUpdatesOnStart = localStorage.getItem('anshelf-check-updates-on-start') !== 'false'; const folds = JSON.parse(localStorage.getItem('anshelf-category-folds') || '[]'); if (Array.isArray(folds)) state.collapsedCategories = new Set(folds.filter(id => typeof id === 'string')); } catch { /* use default */ }
 const unsubscribeDragError = window.shelf?.onDragError?.(message => toast(typeof message === 'string' ? message : message?.message || '未能开始拖拽，请重试。'));
 const unsubscribeImportNotice = window.shelf?.onImportNotice?.(message => { state.importNotice = String(message); if (!state.busy) { toast(state.importNotice, null, 7000); state.importNotice = null; } refresh(); });
-window.addEventListener('beforeunload', () => { refreshStopped = true; clearTimeout(refreshTimer); clearTimeout(updateTimer); disposePreview(); audio.dispose(); stageDrag.dispose(); skinControls.dispose(); unsubscribeDragError?.(); unsubscribeImportNotice?.(); });
+window.addEventListener('beforeunload', () => { refreshStopped = true; clearTimeout(refreshTimer); clearTimeout(updateTimer); disposePreview(); audio.dispose(); stageDrag.dispose(); skinControls.dispose(); confirmation.dispose(); pluginControls.dispose(); downloadControls.dispose(); unsubscribeConfirm?.(); unsubscribeDragError?.(); unsubscribeImportNotice?.(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !refreshStopped) { clearTimeout(refreshTimer); pollRefresh(); } });
 setTheme(savedTheme);
 setDensity(savedDensity);

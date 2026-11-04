@@ -76,4 +76,4 @@ function registerUpdateIpc({ ipcMain, webContents, checker, openExternal }) {
     return true;
   });
 }
-module.exports = { createUpdateChecker, releaseInfo, compareVersions, registerUpdateIpc };
+module.exports = { createUpdateChecker, releaseInfo, compareVersions, registerUpdateIpc, fetchLatestRelease };

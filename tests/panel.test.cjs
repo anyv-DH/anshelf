@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function panel({ connected = true } = {}) {
+function panel({ connected = true, themed = false, canResize = false } = {}) {
   const button = { disabled: true, textContent: '', title: '', attrs: {}, setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(event, handler) { this.click = handler; } };
   const addButton = { disabled: false, textContent: '', title: '', attrs: {}, setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(event, handler) { this.click = handler; } };
   let pending = null, response, tick, heartbeatError = false, addResponse, importResult = null, importRequest = null, timeOffset = 0;
@@ -26,29 +26,77 @@ function panel({ connected = true } = {}) {
     if (!code.includes('AnShelfInsertWhole')) { callback('42'); return; }
     calls.push(['evalScript', code]); response = callback;
   } };
-  const window = { __adobe_cep__: connected ? cep : null, cep_node: { require(name) { if (name === 'process') return { env: { APPDATA: '/appdata' } }; if (name === 'path') return path; return receiver; } }, addEventListener() {} };
+  const confirmation = { hidden: true }, confirmSave = { addEventListener(_event, fn) { this.click = fn; }, focus() {} }, confirmCancel = { addEventListener(_event, fn) { this.click = fn; }, focus() {} };
+  const window = { innerWidth: themed ? 340 : 48, innerHeight: themed ? 230 : 88, __adobe_cep__: connected ? cep : null, cep_node: { require(name) { if (name === 'process') return { env: { APPDATA: '/appdata' } }; if (name === 'path') return path; return receiver; } }, addEventListener() {}, setTimeout(fn) { fn(); return 1; }, clearTimeout() {} };
+  if (canResize) cep.resizeContent = (width, height) => {
+    calls.push(['resize', width, height]);
+    if (canResize === 'throws') throw new Error('AN owns the docked dimensions');
+    if (canResize !== 'ignored') { window.innerWidth = width; window.innerHeight = height; }
+  };
   const PanelDate = class extends Date { constructor(...args) { super(...(args.length ? args : [Date.now() + timeOffset])); } };
-  const context = vm.createContext({ window, document: { getElementById: id => id === 'insert' ? button : id === 'add-current' ? addButton : null }, Date: PanelDate, JSON, decodeURI, setInterval: callback => { tick = callback; return 1; }, clearInterval() {} });
+  const context = vm.createContext({ window, document: { getElementById: id => id === 'insert' ? button : id === 'add-current' ? addButton : (themed || canResize) && id === 'add-confirm' ? confirmation : (themed || canResize) && id === 'confirm-save' ? confirmSave : (themed || canResize) && id === 'confirm-cancel' ? confirmCancel : null, addEventListener() {} }, Date: PanelDate, JSON, decodeURI, setInterval: callback => { tick = callback; return 1; }, clearInterval() {} });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../plugin/panel.js'), 'utf8'), context);
-  return { button, addButton, calls, completed, cleaned, send(id) { pending = request(id); tick(); }, tick() { tick(); }, advance(ms) { timeOffset += ms; tick(); }, saved(result) { addResponse(JSON.stringify(result)); }, imported(result) { importResult = result; tick(); }, failHeartbeat(value) { heartbeatError = value; tick(); }, captureResponse() { return response; }, respond(result) { response(JSON.stringify(result)); } };
+  return { button, addButton, confirmation, confirmSave, confirmCancel, calls, completed, cleaned, send(id) { pending = request(id); tick(); }, tick() { tick(); }, advance(ms) { timeOffset += ms; tick(); }, saved(result) { addResponse(JSON.stringify(result)); }, imported(result) { importResult = result; tick(); }, failHeartbeat(value) { heartbeatError = value; tick(); }, captureResponse() { return response; }, respond(result) { response(JSON.stringify(result)); } };
 }
 
-test('compact CEP markup contains paste and add-current buttons within an 88x48 default geometry', () => {
+test('compact CEP markup contains two vertical actions within a 48x88 default geometry', () => {
   const html = fs.readFileSync(path.join(__dirname, '../plugin/index.html'), 'utf8');
   const manifest = fs.readFileSync(path.join(__dirname, '../plugin/CSXS/manifest.xml'), 'utf8');
-  assert.equal((html.match(/<button\b/g) || []).length, 2);
+  assert.equal((html.split('<main>')[1].split('</main>')[0].match(/<button\b/g) || []).length, 2);
+  assert.match(html, /id="add-confirm"[^>]*hidden/);
   assert.match(html, /id="add-current"/);
   assert.doesNotMatch(html, /id="(?:state|name|path|asset|dot|detail)"/);
   assert.match(html, /<title>安安素材管理器<\/title>/);
   assert.match(manifest, /<Menu>安安素材管理器<\/Menu>/);
-  assert.match(manifest, /<Size><Height>48<\/Height><Width>88<\/Width><\/Size>/);
-  assert.match(manifest, /<MinSize><Height>40<\/Height><Width>80<\/Width><\/MinSize>/);
+  assert.match(manifest, /<Size><Height>88<\/Height><Width>48<\/Width><\/Size>/);
+  assert.match(manifest, /<MinSize><Height>80<\/Height><Width>40<\/Width><\/MinSize>/);
   assert.match(manifest, /<Icon Type="Normal">\.\/icon\.png<\/Icon>/);
   assert.match(manifest, /<Icon Type="DarkNormal">\.\/icon\.png<\/Icon>/);
   const png = fs.readFileSync(path.join(__dirname, '../plugin/icon.png'));
   assert.deepEqual(png.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   assert.equal(png.readUInt32BE(16), 64);
   assert.equal(png.readUInt32BE(20), 64);
+});
+
+test('themed confirmation cancels before saving or queuing and confirms only the displayed document id', () => {
+  const view = panel({ themed: true });
+  view.addButton.click();
+  assert.equal(view.confirmation.hidden, false);
+  assert.equal(view.calls.filter(call => call[0] === 'saveCurrent').length, 0);
+  view.confirmCancel.click();
+  assert.equal(view.confirmation.hidden, true);
+  assert.equal(view.addButton.textContent, '已取消');
+  assert.equal(view.calls.filter(call => call[0] === 'saveCurrent' || call[0] === 'import').length, 0);
+  view.addButton.click();
+  view.confirmSave.click();
+  assert.equal(view.confirmation.hidden, true);
+  const save = view.calls.find(call => call[0] === 'saveCurrent');
+  assert.match(save[1], /AnShelfCurrentDocumentForLibrary","42"/);
+  view.saved({ version: 1, ok: true, file: 'C:\\works\\当前作品.fla' });
+  assert.equal(view.calls.filter(call => call[0] === 'import').length, 1);
+});
+
+test('floating narrow panel temporarily enlarges for confirmation and restores its exact size on cancel', () => {
+  const view = panel({ canResize: true });
+  view.addButton.click();
+  assert.equal(view.confirmation.hidden, false);
+  view.confirmCancel.click();
+  assert.deepEqual(view.calls.filter(call => call[0] === 'resize'), [['resize', 340, 230], ['resize', 48, 88]]);
+  assert.equal(view.calls.filter(call => call[0] === 'saveCurrent').length, 0);
+});
+
+test('docked panels that ignore or reject resize use native confirmation instead of an unreadable tiny dialog', () => {
+  for (const canResize of ['ignored', 'throws']) {
+    const view = panel({ canResize });
+    view.addButton.click();
+    assert.equal(view.confirmation.hidden, true);
+    const saves = view.calls.filter(call => call[0] === 'saveCurrent');
+    assert.equal(saves.length, 1);
+    assert.doesNotMatch(saves[0][1], /AnShelfCurrentDocumentForLibrary","42"/);
+    view.saved({ version: 1, ok: false, cancelled: true });
+    assert.equal(view.addButton.textContent, '已取消');
+    assert.equal(view.calls.filter(call => call[0] === 'import').length, 0);
+  }
 });
 
 test('add-current saves once, queues only a saved FLA, and shows the bounded import receipt', () => {

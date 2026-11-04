@@ -9,6 +9,7 @@ const {sha256}=require('../core/files.cjs');
 const {PreviewQueue}=require('../core/preview.cjs');
 const {createSync}=require('./host-sync.cjs');
 const {duplicateFile,isWithin}=require(path.join(__dirname,'duplicate-file.cjs'));
+const {locateManagedFile}=require('../core/managed-file-recovery.cjs');
 
 function animateFilename(asset) {
   let stem = String(asset.name || asset.originalName || '未命名素材').replace(/\.fla$/i, '')
@@ -47,8 +48,7 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     let a=typeof id==='string'?library.getAsset(id):null;
     if(!a)throw new Error('请选择素材库中存在的素材');
     if(a.kind!=='audio'){
-      const original=resolveManagedPath(bridge.root,a.managedPath,'assets');
-      if(path.extname(original).toLowerCase()!=='.fla')throw new Error('只能使用受管理的 FLA 素材');
+      if(typeof a.managedPath!=='string'||path.extname(a.managedPath).toLowerCase()!=='.fla')throw new Error('只能使用受管理的 FLA 素材');
       const reconciled=await library.reconcileManagedFile(id,animateFilename);
       a=reconciled.asset;
       if(reconciled.contentChanged)queue.add([a],true);
@@ -113,6 +113,7 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     importPaths,
     assignCategory:async(ids,id)=>library.assignCategory(ids,id),undo:async()=>library.undo(),
     addToCategory:async(ids,id)=>library.addToCategory(ids,id),removeFromCategory:async(ids,id)=>library.removeFromCategory(ids,id),
+    removeFromCategories:async(ids,categoryIds)=>library.removeFromCategories(ids,categoryIds),
     createCategory:async(name,parentId=null,scope='all')=>library.createCategory(name,parentId,scope),renameCategory:async(id,name,parentId=undefined)=>library.renameCategory(id,name,parentId),deleteCategory:async(id)=>library.deleteCategory(id),
     setCategoryPinned:async(id,pinned)=>library.setCategoryPinned(id,pinned),
     updateAsset:async(id,patch)=>library.updateAsset(id,patch),removeAssets:async(ids)=>library.removeAssets(ids),
@@ -140,7 +141,7 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     duplicateInFolder:async(id)=>{
       const a=typeof id==='string'?library.getAsset(id):null;
       if(!a)throw new Error('请选择素材库中存在的素材');
-      const managed=resolveManagedPath(bridge.root,a.managedPath,'assets');
+      const managed=a.kind==='audio'?resolveManagedPath(bridge.root,a.managedPath,'assets'):(await locateManagedFile(bridge.root,a)).file;
       const extension=path.extname(managed).toLowerCase();
       if(a.kind==='audio'?!AUDIO_EXTENSIONS.includes(extension):extension!=='.fla')throw new Error('受管理素材文件格式无效，FLA或音频格式不匹配');
       if(a.kind==='audio'&&extension!==a.extension)throw new Error('音频扩展名与记录不一致');

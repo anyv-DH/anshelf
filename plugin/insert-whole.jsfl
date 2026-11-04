@@ -2,13 +2,15 @@
 /** AnShelf guarded receiver. Opens the one managed FLA directly and never stages a copy.
  * Native Animate compatibility is verified separately for each supported host.
  */
-function AnShelfCurrentDocumentForLibrary() {
+function AnShelfCurrentDocumentForLibrary(confirmedDocumentId) {
     var result = { version: 1, ok: false };
     try {
         var current = fl.getDocumentDOM();
         if (!current) throw new Error("请先打开要加入素材库的 AN 文档");
         if (current.pathURI && !/\.fla$/i.test(current.pathURI)) throw new Error("请先将当前文档另存为 FLA，再加入素材库");
-        if (!confirm("将当前文档保存并加入安安素材管理器？\n若为库内文档将更新原素材，是否继续？")) { result.cancelled = true; return AnShelfJSON(result); }
+        if (confirmedDocumentId !== undefined && confirmedDocumentId !== null) {
+            if (!/^(0|[1-9][0-9]*)$/.test(String(confirmedDocumentId)) || Number(confirmedDocumentId) !== current.id) throw new Error("确认期间当前文档已切换，请重新点击加入素材库");
+        } else if (!confirm("将当前文档保存并加入安安素材管理器？\n若为库内文档将更新原素材，是否继续？")) { result.cancelled = true; return AnShelfJSON(result); }
         // Native Save opens Animate's own save dialog for an untitled document.
         if (!fl.saveDocument(current)) { result.cancelled = true; return AnShelfJSON(result); }
         if (!current.path || !current.pathURI || !/\.fla$/i.test(current.pathURI)) throw new Error("请先将当前文档保存为 FLA 文件");

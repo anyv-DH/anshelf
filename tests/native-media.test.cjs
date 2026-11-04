@@ -139,13 +139,13 @@ test('desktop integrates streaming media, safe poster lookup, mode filters and a
   const app = new EventEmitter();
   Object.assign(app, { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), getVersion: () => '0.3.8', getPath: () => library.root, getAppPath: () => path.join(__dirname, '..'), isPackaged: false, quit() {} });
   class FakeWindow {
-    constructor() { window = this; this.webContents = { setWindowOpenHandler() {}, on() {}, send() {}, startDrag(item) { dragCalls.push(item); } }; }
+    constructor() { window = this; this.webContents = { setWindowOpenHandler() {}, on() {}, removeListener() {}, send() {}, startDrag(item) { dragCalls.push(item); } }; }
     isDestroyed() { return false; }
     loadFile() { return Promise.resolve(); }
   }
   const host = { api: { prepareDrag: async () => ({ file: '/private/known.mp3', kind: 'audio' }) }, library };
   const electron = { app, BrowserWindow: FakeWindow, dialog: { showOpenDialog: async (_win, options) => { picked.push(options); return { canceled: true, filePaths: [] }; }, showErrorBox: (_title, message) => { throw new Error(message); } },
-    ipcMain: { handle(channel, handler) { if (channel === 'shelf:call') callHandler = handler; }, on(_channel, handler) { dragHandler = handler; } },
+    ipcMain: { handle(channel, handler) { if (channel === 'shelf:call') callHandler = handler; }, on(_channel, handler) { dragHandler = handler; }, removeListener() {} },
     protocol: { registerSchemesAsPrivileged(value) { privileged = value; }, handle(_scheme, handler) { protocolHandler = handler; } },
     session: { defaultSession: { webRequest: { onBeforeRequest() {} } } }, shell: {}, nativeImage: { createFromPath: () => ({ resize: () => ({ size: 32 }) }) },
     net: { fetch: async url => { fetched.push(url); return new Response('poster-fixture'); } },

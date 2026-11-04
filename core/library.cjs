@@ -5,6 +5,7 @@ const { randomUUID } = require('node:crypto');
 const { insidePath, atomicJson, sha256, findSidecar, copySidecar, scanFla } = require('./files.cjs');
 const { PREVIEW_RESOLUTIONS, normalizePreviewResolution } = require('./preview-resolution.cjs');
 const { normalizeCategoryScopes, validateCategoryScopes, resolveCategoryScope, assertCategoryMoveScope } = require('./category-scope.cjs');
+const { locateManagedFile } = require('./managed-file-recovery.cjs');
 
 const DEFAULT_CATEGORIES = ['武器', '人物', '背景', '特效', '道具'];
 const LIKE_DURATION_MS = 24 * 60 * 60 * 1000;
@@ -119,6 +120,37 @@ function historyChanges(before, after) {
   return changes;
 }
 
+function restoreAssetMetadata(asset, previous) {
+  // Legacy history saved whole records. Undo is allowed to restore user edits,
+  // never paths, saved-byte hashes or previews changed outside that edit.
+  for (const key of ['name', 'tags', 'favorite', 'categoryId', 'categoryIds', 'likedAt']) {
+    if (Object.hasOwn(previous, key)) asset[key] = previous[key];
+  }
+  if (Object.hasOwn(previous, 'categoryId') && !Object.hasOwn(previous, 'categoryIds')) {
+    setAssetCategories(asset, previous.categoryId ? [previous.categoryId] : []);
+  }
+}
+
+function mergeRestoredAsset(existing, restored) {
+  setAssetCategories(existing, [...assetCategoryIds(existing), ...assetCategoryIds(restored)]);
+  existing.tags = [...new Set([...(existing.tags || []), ...(restored.tags || [])])];
+  existing.sourcePaths = [...new Set([...(existing.sourcePaths || []), ...(restored.sourcePaths || [])])];
+  existing.favorite = Boolean(existing.favorite || restored.favorite);
+  const times = [existing.likedAt, restored.likedAt].filter(value => typeof value === 'string'
+    && Number.isFinite(Date.parse(value)) && Date.parse(value) <= Date.now());
+  existing.likedAt = times.sort((a, b) => Date.parse(b) - Date.parse(a))[0] || null;
+}
+
+function remapMergedAssetHistory(history, oldId, currentId) {
+  for (const changes of history) for (const change of changes) {
+    // An old creation must not later delete an independently reimported asset.
+    if (change.collection !== 'assets' || change.id !== oldId || change.before === null) continue;
+    change.id = currentId;
+    if (change.before) change.before.id = currentId;
+    if (change.after) change.after.id = currentId;
+  }
+}
+
 function validateState(state, root) {
   if (state.version !== 1 || !Array.isArray(state.assets) || !Array.isArray(state.categories) || !Array.isArray(state.history)) {
     throw new Error('素材库元数据格式无效，请先备份并检查 library.json');
@@ -205,7 +237,9 @@ class Library {
       result = await this.change(async state => {
         const asset = findAsset(state, id);
         if (asset.kind === 'audio') throw new Error('音频素材不能在 AN 中编辑');
-        const current = insidePath(this.root, asset.managedPath);
+        const location = await locateManagedFile(this.root, asset);
+        const current = location.file;
+        if (location.recovered) asset.managedPath = location.relative;
         const stat = await fs.lstat(current);
         if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('素材文件不是安全的普通文件');
         const actualHash = await sha256(current);
@@ -216,7 +250,7 @@ class Library {
           targetRelative = path.join('assets', asset.id, filename);
         }
 
-        let pathChanged = false;
+        let pathChanged = location.recovered;
         if (targetRelative !== asset.managedPath) {
           const target = insidePath(this.root, targetRelative);
           const assetsDirectory = path.join(this.root, 'assets');
@@ -230,8 +264,15 @@ class Library {
 
           try {
             const targetStat = await fs.lstat(target);
-            if (!targetStat.isFile() || targetStat.isSymbolicLink() || await sha256(target) !== actualHash) throw new Error('同名素材文件已存在且内容不一致');
-            duplicatePath = current;
+            if (!targetStat.isFile() || targetStat.isSymbolicLink()) throw new Error('同名素材文件已存在且内容不一致');
+            // Separators, Windows casing and 8.3 aliases may name this same
+            // physical file. Canonicalize both with the same implementation;
+            // updating its metadata must never schedule its payload for removal.
+            const [currentReal, targetReal] = await Promise.all([fs.realpath(current), fs.realpath(target)]);
+            if (currentReal !== targetReal) {
+              if (await sha256(target) !== actualHash) throw new Error('同名素材文件已存在且内容不一致');
+              duplicatePath = current;
+            }
           } catch (error) {
             if (error.code !== 'ENOENT') throw error;
             await fs.rename(current, target);
@@ -252,7 +293,7 @@ class Library {
             scene: null, frame: null, previewRevision: randomUUID()
           });
         }
-        return { asset: assetSnapshot(asset), contentChanged, pathChanged, diskHash: actualHash };
+        return { asset: assetSnapshot(asset), contentChanged, pathChanged, recovered: location.recovered, diskHash: actualHash };
       }, false);
     } catch (error) {
       if (moved) await fs.rename(moved.to, moved.from).catch(() => {});
@@ -393,6 +434,18 @@ class Library {
       if (!Array.isArray(ids)) throw new Error('请提供素材 ID 列表');
       const assets = [...new Set(ids)].map(assetId => findAsset(state, assetId));
       for (const asset of assets) setAssetCategories(asset, assetCategoryIds(asset).filter(value => value !== id));
+      return assets;
+    });
+  }
+
+  removeFromCategories(ids, categoryIds) {
+    return this.change(state => {
+      if (!Array.isArray(ids)) throw new Error('请提供素材 ID 列表');
+      if (!Array.isArray(categoryIds) || !categoryIds.length || categoryIds.some(id => typeof id !== 'string' || !id)) throw new Error('请选择要移出的分类');
+      const categories = new Set(categoryIds);
+      for (const id of categories) checkCategory(state, id);
+      const assets = [...new Set(ids)].map(id => findAsset(state, id));
+      for (const asset of assets) setAssetCategories(asset, assetCategoryIds(asset).filter(id => !categories.has(id)));
       return assets;
     });
   }
@@ -542,14 +595,26 @@ class Library {
         const index = items.findIndex((item) => item.id === change.id);
         if (change.previous) {
           if (index >= 0) {
-            Object.assign(items[index], change.previous);
-            // Version-one undo records knew only the primary assignment.
-            if (change.collection === 'assets' && Object.hasOwn(change.previous, 'categoryId') && !Object.hasOwn(change.previous, 'categoryIds')) setAssetCategories(items[index], change.previous.categoryId ? [change.previous.categoryId] : []);
+            if (change.collection === 'assets') restoreAssetMetadata(items[index], change.previous);
+            else Object.assign(items[index], change.previous);
           }
         } else if (change.before === null) {
           if (index >= 0) items.splice(index, 1);
         } else {
-          if (index >= 0) items[index] = change.before;
+          if (change.collection === 'assets' && index >= 0) restoreAssetMetadata(items[index], change.before);
+          else if (change.collection === 'assets') {
+            const restored = change.before;
+            const storagePath = value => {
+              const absolute = path.resolve(this.root, value);
+              return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+            };
+            const existing = items.find(item => (item.kind || 'fla') === (restored.kind || 'fla')
+              && (item.hash === restored.hash || storagePath(item.managedPath) === storagePath(restored.managedPath)));
+            if (existing) {
+              mergeRestoredAsset(existing, restored);
+              remapMergedAssetHistory(state.history, change.id, existing.id);
+            } else items.splice(Math.max(0, Math.min(change.index ?? items.length, items.length)), 0, restored);
+          } else if (index >= 0) items[index] = change.before;
           else items.splice(Math.max(0, Math.min(change.index ?? items.length, items.length)), 0, change.before);
         }
       }

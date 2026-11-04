@@ -220,3 +220,22 @@ test('current-document confirmation cancellation returns before saving and inval
   assert.equal(prompts.length, 1);
   assert.equal(saves, 0);
 });
+
+test('a themed confirmation saves only its exact AN document and never silently saves a switched document', async () => {
+  const code = await fs.readFile(path.join(__dirname, '../plugin/insert-whole.jsfl'), 'utf8');
+  let current = { id: 42, name: '已确认的作品.fla', pathURI: 'file:///C|/work/current.fla', path: 'C:\\work\\current.fla' }, saves = 0, prompts = 0;
+  const context = vm.createContext({ fl: { getDocumentDOM: () => current, saveDocument() { saves++; return true; } }, confirm() { prompts++; return false; }, JSON });
+  vm.runInContext(code, context);
+  const run = id => JSON.parse(context.AnShelfCurrentDocumentForLibrary(id));
+  assert.equal(run('42').ok, true);
+  assert.equal(saves, 1);
+  assert.equal(prompts, 0);
+  current = { ...current, id: 43 };
+  assert.match(run('42').error, /文档已切换/);
+  assert.equal(saves, 1);
+  for (const invalid of ['-1', '42junk', '', '0043']) assert.match(run(invalid).error, /文档已切换/);
+  assert.equal(saves, 1);
+  assert.equal(run(undefined).cancelled, true);
+  assert.equal(prompts, 1);
+  assert.equal(saves, 1);
+});

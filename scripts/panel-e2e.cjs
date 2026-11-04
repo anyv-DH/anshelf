@@ -10,7 +10,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true, channel: 'msedge' });
   const errors = [], checks = [];
   try {
-    const page = await browser.newPage({ viewport: { width: 88, height: 48 }, deviceScaleFactor: 2 });
+    const page = await browser.newPage({ viewport: { width: 48, height: 88 }, deviceScaleFactor: 2 });
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {
       window.panelTest = { pending: null, response: null, heartbeatError: false, completed: [], prepared: [], imports: [], importResult: null };
@@ -40,13 +40,14 @@ async function main() {
     await button.waitFor();
     assert.equal(await button.textContent(), '等待素材');
     assert.equal(await button.isDisabled(), true);
-    assert.equal(await page.locator('button').count(), 2);
+    assert.equal(await page.locator('main>button').count(), 2);
+    assert.equal(await page.locator('#add-confirm').isVisible(), false);
     const addButton = page.locator('#add-current');
     assert.equal(await addButton.isEnabled(), true);
     checks.push('waiting state with compact paste and add-current buttons');
 
     async function layouts(state) {
-      for (const [width, height] of [[80, 40], [88, 48], [180, 56], [320, 60]]) {
+      for (const [width, height] of [[40, 80], [48, 88], [180, 120], [320, 160]]) {
         await page.setViewportSize({ width, height });
         const layout = await page.evaluate(() => {
           const button = document.getElementById('insert'), rect = button.getBoundingClientRect();
@@ -54,19 +55,19 @@ async function main() {
           return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, textFits: button.scrollWidth <= button.clientWidth && button.scrollHeight <= button.clientHeight, fontSize: parseFloat(style.fontSize), icon: icon.backgroundImage, iconWidth: parseFloat(icon.width), label: button.getAttribute('aria-label'), title: button.title, state: button.getAttribute('data-state') };
         });
         assert.equal(layout.state, state);
-        assert.deepEqual([layout.x, layout.y, layout.width, layout.height], [4, 4, (width - 12) / 2, height - 8]);
+        assert.deepEqual([layout.x, layout.y, layout.width, layout.height], [4, 4, width - 8, (height - 12) / 2]);
         assert.equal(layout.scrollWidth, width);
         assert.equal(layout.scrollHeight, height);
         assert.equal(layout.textFits, true, `${state} at ${width}x${height}`);
-        assert.equal(layout.fontSize === 0, width < 250);
+        assert.equal(layout.fontSize === 0, width < 200);
         assert.match(layout.icon, /icon\.png/);
         assert.ok(layout.iconWidth > 0 && layout.iconWidth <= layout.width);
         assert.ok(layout.label.length > 0 && layout.title.length > 0);
         const addLayout = await addButton.evaluate(button => { const r = button.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height,textFits:button.scrollWidth<=button.clientWidth&&button.scrollHeight<=button.clientHeight,scrollWidth:button.scrollWidth,clientWidth:button.clientWidth,scrollHeight:button.scrollHeight,clientHeight:button.clientHeight,font:getComputedStyle(button).font,iconFont:getComputedStyle(button,'::before').font }; });
-        assert.deepEqual([addLayout.x,addLayout.y,addLayout.width,addLayout.height], [(width + 4) / 2,4,(width - 12)/2,height - 8]);
+        assert.deepEqual([addLayout.x,addLayout.y,addLayout.width,addLayout.height], [4,(height + 4)/2,width - 8,(height - 12)/2]);
         assert.equal(addLayout.textFits,true,`${state} at ${width}x${height}: ${JSON.stringify(addLayout)}`);
       }
-      checks.push(`${state} at 80/88/180/320 pixels retains both compact buttons, tooltip/accessibility and has no clipping or scrolling`);
+      checks.push(`${state} at 40/48/180/320 pixels retains two vertical buttons, tooltip/accessibility and has no clipping or scrolling`);
     }
     await layouts('waiting');
 
@@ -86,9 +87,9 @@ async function main() {
     checks.push('original local PNG icon decodes without remote assets');
     const out = path.join(root, 'test-output');
     await fs.mkdir(out, { recursive: true });
-    await page.setViewportSize({ width: 88, height: 48 });
+    await page.setViewportSize({ width: 48, height: 88 });
     await page.screenshot({ path: path.join(out, 'panel-icon-small.png'), scale: 'css' });
-    await page.setViewportSize({ width: 320, height: 60 });
+    await page.setViewportSize({ width: 320, height: 160 });
     await page.screenshot({ path: path.join(out, 'panel-icon-wide.png'), scale: 'css' });
     await page.screenshot({ path: path.join(out, 'panel-compact.png'), scale: 'css' });
     await button.click();
@@ -150,6 +151,33 @@ async function main() {
     assert.equal(await addButton.isEnabled(),true);
     assert.equal(await page.evaluate(() => window.panelTest.imports.length),1);
     checks.push('native save cancellation leaves the document out of the import queue');
+    await page.setViewportSize({width:340,height:230});
+    await addButton.click();
+    assert.equal(await page.locator('#add-confirm').isVisible(),true);
+    for (const [width,height] of [[280,200],[340,230]]) {
+      await page.setViewportSize({width,height});
+      const readable = await page.locator('#add-confirm').evaluate(dialog => {
+        const box=dialog.getBoundingClientRect();
+        return Array.from(dialog.querySelectorAll('h1,p,button')).every(item => {
+          const rect=item.getBoundingClientRect();
+          return rect.left>=box.left&&rect.right<=box.right&&rect.top>=box.top&&rect.bottom<=box.bottom&&item.scrollWidth<=item.clientWidth&&item.scrollHeight<=item.clientHeight;
+        });
+      });
+      assert.equal(readable,true,`themed confirmation at ${width}x${height}`);
+    }
+    await page.screenshot({path:path.join(out,'panel-confirm-themed.png'),scale:'css'});
+    await page.locator('#confirm-cancel').click();
+    assert.equal(await page.locator('#add-confirm').isVisible(),false);
+    assert.equal(await page.evaluate(() => window.panelTest.imports.length),1);
+    await addButton.click();
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#add-confirm').isVisible(),false);
+    await addButton.click();
+    await page.locator('#confirm-save').click();
+    await page.evaluate(() => window.panelTest.saveResponse(JSON.stringify({version:1,ok:true,file:'C:\\works\\另一份作品.fla',name:'另一份作品.fla'})));
+    assert.equal(await page.locator('#add-confirm').isVisible(),false);
+    assert.equal(await page.evaluate(() => window.panelTest.imports.length),2);
+    checks.push('themed confirmation is readable, supports cancel/Escape and queues a document only after explicit acceptance');
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(out, 'panel-e2e-result.json'), JSON.stringify({ checks, pageErrors: errors }, null, 2));
     console.log(JSON.stringify({ checks, pageErrors: errors }, null, 2));

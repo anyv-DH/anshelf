@@ -173,8 +173,8 @@ async function main() {
     await pollSnapshot(page, snapshot => snapshot.categories.some(item => item.name === '男'));
     checks.push('parent and child navigation with inherited parent browsing');
     await page.locator(`#categories [data-action="edit-category"][data-id="${hierarchy.parent.id}"]`).click();
-    page.once('dialog', dialog => dialog.accept());
     await page.locator('[data-action="delete-category"]').click();
+    await page.locator('#confirm-dialog[open] [data-confirm="accept"]').click();
     await pollSnapshot(page, snapshot => !snapshot.categories.some(item => item.name === '人物V2'));
     assert.equal((await page.evaluate(() => window.shelf.snapshot())).categories.find(item => item.id === child.id).parentId, null);
     checks.push('category create, child create, rename and deletion promotion');

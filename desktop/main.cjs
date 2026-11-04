@@ -3,6 +3,7 @@ const {app,BrowserWindow,dialog,ipcMain,protocol,net,shell,nativeImage,session,s
 const path=require('node:path');
 const fs=require('node:fs/promises');
 const {spawn}=require('node:child_process');
+const {randomUUID}=require('node:crypto');
 const {pathToFileURL}=require('node:url');
 const {createHost}=require('./host.cjs');
 const {createRenderer}=require('./previews.cjs');
@@ -14,9 +15,13 @@ const {createGifPoster}=require('./gif-poster.cjs');
 const {createDocumentImportReceiver}=require('./document-import.cjs');
 const {createUpdateChecker,registerUpdateIpc}=require('./update-check.cjs');
 const {createSkinController}=require('./skin.cjs');
+const {createConfirmationBroker}=require('./confirmation-broker.cjs');
+const {createPluginUpdater}=require('./plugin-update.cjs');
+const {createUpdateDownloader}=require('./update-download.cjs');
+const {createUpdateService}=require('./update-service.cjs');
 const {resolveManagedPath}=require('../core/bridge.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'anshelf',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
-let win,host,documentImports,updates,skin;
+let win,host,documentImports,updates,skin,confirmations,updateService;
 async function openAnimateFile(file){
   const executable=process.env.ANSHELF_ANIMATE_EXE;
   if(executable){
@@ -42,7 +47,24 @@ app.whenReady().then(async()=>{
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith('file:'))event.preventDefault();});
   updates=createUpdateChecker({version:app.getVersion()});
+  confirmations=createConfirmationBroker({ipcMain,webContents:win.webContents});
+  const pluginUpdater=createPluginUpdater({directory:app.isPackaged?path.join(process.resourcesPath,'AnimatePlugin'):path.join(app.getAppPath(),'plugin')});
+  for(const [channel,action] of Object.entries({'shelf:plugin-status':()=>pluginUpdater.status(),'shelf:plugin-install':()=>pluginUpdater.install()}))ipcMain.handle(channel,async event=>{if(event.sender!==win.webContents)throw new Error('操作不允许');return action();});
   registerUpdateIpc({ipcMain,webContents:win.webContents,checker:updates,openExternal:url=>shell.openExternal(url)});
+  updateService=createUpdateService({version:app.getVersion(),mode:app.isPackaged?(process.env.PORTABLE_EXECUTABLE_FILE?'portable':'installed'):null,
+    downloader:createUpdateDownloader({directory:path.join(app.getPath('appData'),'AnShelfUpdates')}),
+    onProgress:progress=>{if(!win.isDestroyed())win.webContents.send('shelf:update-progress',progress);},
+    launch:async result=>{
+      // PowerShell cannot read inside app.asar. Extract only this bundled helper
+      // beside the verified download; no renderer-supplied path is accepted.
+      const helper=path.join(path.dirname(result.file),'launch-update-'+randomUUID()+'.ps1');
+      await fs.writeFile(helper,await fs.readFile(path.join(__dirname,'launch-update.ps1')),{flag:'wx'});
+      await new Promise((resolve,reject)=>{
+        const child=spawn('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',helper,'-ManagerProcessId',String(process.pid),'-UpdateExecutable',result.file,'-ExpectedSha256',result.hash],{shell:false,detached:true,windowsHide:true,stdio:'ignore'});
+        child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});
+      });
+    },reveal:file=>shell.showItemInFolder(file),quit:()=>app.quit()});
+  for(const [channel,action] of Object.entries({'shelf:update-download':()=>updateService.download(),'shelf:update-cancel':()=>updateService.cancel(),'shelf:update-launch':()=>updateService.launch(),'shelf:update-reveal':()=>updateService.reveal()}))ipcMain.handle(channel,async event=>{if(event.sender!==win.webContents)throw new Error('操作不允许');return action();});
   skin=await createSkinController({root,pickFile:async()=>{const r=await dialog.showOpenDialog(win,{title:'选择皮肤底图或视频',properties:['openFile'],filters:[{name:'图片、动图和视频',extensions:['png','jpg','jpeg','webp','gif','mp4','webm']}]});return r.canceled?[]:r.filePaths;}});
   for(const [method,action] of Object.entries({getSkin:()=>skin.get(),selectSkin:()=>skin.select(),updateSkin:patch=>skin.update(patch),resetSkin:()=>skin.reset()})){
     ipcMain.handle('shelf:'+method,async(event,...args)=>{if(event.sender!==win.webContents)throw new Error('操作不允许');return action(...args);});
@@ -54,7 +76,7 @@ app.whenReady().then(async()=>{
     openInAnimate:openAnimateFile,
     revealFile:async file=>{shell.showItemInFolder(file);},
     pickDuplicateFolder:async()=>{const r=await dialog.showOpenDialog(win,{title:'原文件夹不可用，请选择新文件的保存位置',properties:['openDirectory','createDirectory']});return r.canceled?[]:r.filePaths;},
-    confirmDuplicate:async({name,directory})=>{const r=await dialog.showMessageBox(win,{type:'question',title:'确认复制一份新文件',message:`要复制“${name}”吗？`,detail:`将在以下文件夹保存最新已保存内容的副本：\n${directory}\n\n原文件不会被覆盖，新文件不会自动加入素材库。`,buttons:['取消','确认复制'],defaultId:0,cancelId:0,noLink:true});return r.response===1;},
+    confirmDuplicate:({name,directory})=>confirmations.request({title:'复制一份新文件',message:`请您确认：复制“${name}”？`,detail:`将在以下文件夹保存最新已保存内容的副本：\n${directory}\n\n原文件不会被覆盖，新文件不会自动加入素材库。`,confirmLabel:'确认复制',cancelLabel:'暂不复制'}),
     setTheme:async(theme)=>{win.setBackgroundColor(theme==='warm'?'#f7f1e9':'#171520');return theme;},
     windowAction:async(action)=>windowMode.action(action),
     openPluginFolder:async()=>{const error=await shell.openPath(app.isPackaged?path.join(process.resourcesPath,'AnimatePlugin'):path.join(app.getAppPath(),'plugin'));if(error)throw new Error('无法打开 AN 面板文件夹：'+error);return true;}});
@@ -72,5 +94,5 @@ app.whenReady().then(async()=>{
     if(!win.isDestroyed())win.webContents.send('shelf:import-notice',result.ok?`AN 当前文档已${result.updated?'更新':'加入'}素材库：${result.name}`:`AN 文档加入失败：${result.error||'请重试'}`);
   }});
 }).catch(error=>{dialog.showErrorBox('安安素材管理器启动失败',error.message);app.quit();});
-app.on('before-quit',()=>{documentImports?.close();updates?.close();});
+app.on('before-quit',()=>{documentImports?.close();updates?.close();confirmations?.close();updateService?.close();});
 app.on('window-all-closed',()=>app.quit());

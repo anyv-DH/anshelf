@@ -2,9 +2,67 @@
 (function () {
     'use strict';
     var insert = document.getElementById('insert');
+    var addCurrent = document.getElementById('add-current');
     var queue, path, localURI, extension, api = window.__adobe_cep__;
     var current = null, busy = false, dropping = false, connected = false, timer = null, lastCompleted = null, lastResult = null;
     var documentId = null, contextKnown = false, probing = false, unloaded = false;
+    var adding = false, addRequest = null, addStarted = 0, addGeneration = 0;
+
+    function setAddButton(text, state, description, disabled) {
+        if (!addCurrent) return;
+        addCurrent.textContent = text;
+        addCurrent.title = description;
+        addCurrent.setAttribute('aria-label', text + '。' + description);
+        addCurrent.setAttribute('data-state', state);
+        addCurrent.disabled = disabled;
+    }
+
+    function finishAdd(result) {
+        if (addRequest) {
+            try { queue.clearDocumentImport(addRequest.requestId); } catch (error) { /* Result cleanup does not undo the import. */ }
+        }
+        addRequest = null;
+        adding = false;
+        addGeneration++;
+        var description = result.cancelled ? '已取消加入，未添加或更新素材。' : result.ok ? '素材：' + (result.name || '当前文档') + '。已加入安安素材管理器；预览在后台生成，可回管理器分类。' : String(result.error || '加入未完成');
+        setAddButton(result.cancelled ? '已取消' : result.ok ? '已加入 ✓' : '加入失败', result.cancelled ? 'ready' : result.ok ? 'success' : 'error', description, false);
+        if (!unloaded) { heartbeat(); poll(); }
+    }
+
+    function addCurrentDocument() {
+        if (!addCurrent || adding || busy || !connected || unloaded) return;
+        adding = true;
+        addStarted = new Date().getTime();
+        var generation = ++addGeneration;
+        setAddButton('等待确认…', 'busy', '请在 AN 中确认是否保存并加入素材库；取消不会保存或加入。', true);
+        insert.disabled = true;
+        heartbeat();
+        try {
+            var scriptURI = localURI(path.join(extension, 'insert-whole.jsfl'));
+            var code = '(function(){try{return fl.runScript(' + JSON.stringify(scriptURI) + ',"AnShelfCurrentDocumentForLibrary");}catch(e){return "{\\"version\\":1,\\"ok\\":false,\\"error\\":\\"无法读取当前AN文档\\"}";}})();';
+            api.evalScript(code, function (response) {
+                if (unloaded || !adding || generation !== addGeneration) return;
+                try {
+                    var result = JSON.parse(response);
+                    if (!result || result.version !== 1 || typeof result.ok !== 'boolean') throw new Error('AN 返回的当前文档信息无效');
+                    if (!result.ok) { finishAdd(result); return; }
+                    addRequest = queue.requestDocumentImport(result.file);
+                    // The timeout begins after the user finishes Animate's native Save dialog.
+                    addStarted = new Date().getTime();
+                    setAddButton('正在加入…', 'busy', '请保持安安素材管理器开启；正在加入：' + (result.name || '当前文档'), true);
+                } catch (error) { finishAdd({ ok: false, error: String(error.message || error) }); }
+            });
+        } catch (error) { finishAdd({ ok: false, error: String(error.message || error) }); }
+    }
+
+    function checkDocumentImport() {
+        if (!adding || !addRequest) return;
+        try {
+            var result = queue.documentImportResult(addRequest.requestId);
+            if (result) { finishAdd(result); return; }
+            if (new Date().getTime() - addStarted > 60000) finishAdd({ ok: false, error: '素材管理器未及时响应，请先打开最新版管理器再重试；正在处理的素材可能稍后完成。' });
+        } catch (error) { finishAdd({ ok: false, error: String(error.message || error) }); }
+    }
 
     function setButton(text, state, description, disabled) {
         insert.textContent = text;
@@ -35,17 +93,20 @@
         queue = new receiver.Queue(path.join(appData, 'AnShelf'));
     } catch (error) {
         setButton('连接失败', 'error', String(error.message || error) + '。请检查 Animate 的 CEP 面板安装配置。', true);
+        setAddButton('连接失败', 'error', String(error.message || error), true);
         return;
     }
 
     function heartbeat() {
         try {
-            queue.heartbeat(busy, documentId);
+            queue.heartbeat(busy || adding, documentId);
             connected = true;
+            if (addCurrent) addCurrent.disabled = busy || adding;
             if (busy && current) setButton('正在粘贴…', 'busy', '正在粘贴素材：' + assetName(current), true);
             return true;
         } catch (error) {
             connected = false;
+            if (addCurrent) addCurrent.disabled = true;
             setButton('连接失败', 'error', '无法写入桥接状态：' + String(error.message || error), true);
             return false;
         }
@@ -53,6 +114,7 @@
 
     function refreshContext() {
         if (unloaded || probing) return;
+        if (adding) { checkDocumentImport(); if (adding) { heartbeat(); return; } }
         // An insertion temporarily activates its source document. Preserve the
         // target identity and publish busy until that operation has completed.
         if (busy) { heartbeat(); return; }
@@ -78,7 +140,7 @@
     }
 
     function poll() {
-        if (busy || !connected) return;
+        if (busy || adding || !connected) return;
         try {
             var pending = queue.pending();
             if (!pending) {
@@ -130,7 +192,7 @@
     }
 
     function insertWhole() {
-        if (!current || busy || !connected) return;
+        if (!current || busy || adding || !connected) return;
         var request = current, prepared = null;
         busy = true;
         setButton('正在粘贴…', 'busy', '正在粘贴素材：' + assetName(request), true);
@@ -159,7 +221,7 @@
     function dropTransfer(event) {
         event.preventDefault();
         event.stopPropagation();
-        if (busy || dropping || !connected) return;
+        if (busy || adding || dropping || !connected) return;
         var files = event.dataTransfer && event.dataTransfer.files;
         if (!files || files.length !== 1 || !/^[a-zA-Z0-9-]{1,80}\.anshelf-transfer$/.test(files[0].name) || files[0].size > 4096) {
             dropFailure(new Error('请从安安素材管理器拖素材到此处；直接拖 FLA 文件不会粘贴到舞台'));
@@ -170,7 +232,7 @@
         reader.onerror = function () { dropFailure(new Error('无法读取拖拽素材，请重新从管理器拖出')); };
         reader.onload = function () {
             dropping = false;
-            if (busy || !connected || unloaded) return;
+            if (busy || adding || !connected || unloaded) return;
             try {
                 current = queue.acceptDrop(JSON.parse(reader.result), file.name);
                 if (current.requestId === lastCompleted) throw new Error('此素材已处理，请重新从管理器拖出');
@@ -183,10 +245,11 @@
     }
 
     insert.addEventListener('click', insertWhole);
+    if (addCurrent) addCurrent.addEventListener('click', addCurrentDocument);
     if (document.body && document.body.addEventListener) {
         document.body.addEventListener('dragover', function (event) {
             event.preventDefault();
-            if (event.dataTransfer) event.dataTransfer.dropEffect = busy || dropping ? 'none' : 'copy';
+            if (event.dataTransfer) event.dataTransfer.dropEffect = busy || adding || dropping ? 'none' : 'copy';
         });
         document.body.addEventListener('drop', dropTransfer);
     }

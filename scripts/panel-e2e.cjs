@@ -10,17 +10,21 @@ async function main() {
   const browser = await chromium.launch({ headless: true, channel: 'msedge' });
   const errors = [], checks = [];
   try {
-    const page = await browser.newPage({ viewport: { width: 48, height: 48 }, deviceScaleFactor: 2 });
+    const page = await browser.newPage({ viewport: { width: 88, height: 48 }, deviceScaleFactor: 2 });
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {
-      window.panelTest = { pending: null, response: null, heartbeatError: false, completed: [], prepared: [] };
+      window.panelTest = { pending: null, response: null, heartbeatError: false, completed: [], prepared: [], imports: [], importResult: null };
       const queue = {
         heartbeat() { if (window.panelTest.heartbeatError) throw new Error('写入失败'); },
         pending() { return window.panelTest.pending; },
         prepare(request) { window.panelTest.prepared.push(request.requestId); return { ...request, managedRoot: 'file:///managed' }; },
-        complete(request, result) { window.panelTest.completed.push({ requestId: request.requestId, result }); if (window.panelTest.pending && window.panelTest.pending.requestId === request.requestId) window.panelTest.pending = null; }
+        complete(request, result) { window.panelTest.completed.push({ requestId: request.requestId, result }); if (window.panelTest.pending && window.panelTest.pending.requestId === request.requestId) window.panelTest.pending = null; },
+        requestDocumentImport(file) { window.panelTest.imports.push(file); return {requestId:'current-document',createdAt:Date.now()}; },
+        documentImportResult() { return window.panelTest.importResult; },
+        clearDocumentImport() { window.panelTest.importResult = null; }
       };
       window.__adobe_cep__ = { getSystemPath: () => '/extension', evalScript(code, callback) {
+        if (code.includes('AnShelfCurrentDocumentForLibrary')) { window.panelTest.saveResponse = callback; return; }
         if (!code.includes('AnShelfInsertWhole')) { callback('42'); return; }
         window.panelTest.response = callback;
       } };
@@ -36,11 +40,13 @@ async function main() {
     await button.waitFor();
     assert.equal(await button.textContent(), '等待素材');
     assert.equal(await button.isDisabled(), true);
-    assert.equal(await page.locator('button').count(), 1);
-    checks.push('waiting state with one button');
+    assert.equal(await page.locator('button').count(), 2);
+    const addButton = page.locator('#add-current');
+    assert.equal(await addButton.isEnabled(), true);
+    checks.push('waiting state with compact paste and add-current buttons');
 
     async function layouts(state) {
-      for (const [width, height] of [[40, 40], [48, 48], [180, 56], [240, 60]]) {
+      for (const [width, height] of [[80, 40], [88, 48], [180, 56], [320, 60]]) {
         await page.setViewportSize({ width, height });
         const layout = await page.evaluate(() => {
           const button = document.getElementById('insert'), rect = button.getBoundingClientRect();
@@ -48,16 +54,19 @@ async function main() {
           return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, textFits: button.scrollWidth <= button.clientWidth && button.scrollHeight <= button.clientHeight, fontSize: parseFloat(style.fontSize), icon: icon.backgroundImage, iconWidth: parseFloat(icon.width), label: button.getAttribute('aria-label'), title: button.title, state: button.getAttribute('data-state') };
         });
         assert.equal(layout.state, state);
-        assert.deepEqual([layout.x, layout.y, layout.width, layout.height], [4, 4, width - 8, height - 8]);
+        assert.deepEqual([layout.x, layout.y, layout.width, layout.height], [4, 4, (width - 12) / 2, height - 8]);
         assert.equal(layout.scrollWidth, width);
         assert.equal(layout.scrollHeight, height);
         assert.equal(layout.textFits, true, `${state} at ${width}x${height}`);
-        assert.equal(layout.fontSize === 0, width < 120);
+        assert.equal(layout.fontSize === 0, width < 250);
         assert.match(layout.icon, /icon\.png/);
         assert.ok(layout.iconWidth > 0 && layout.iconWidth <= layout.width);
         assert.ok(layout.label.length > 0 && layout.title.length > 0);
+        const addLayout = await addButton.evaluate(button => { const r = button.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height,textFits:button.scrollWidth<=button.clientWidth&&button.scrollHeight<=button.clientHeight,scrollWidth:button.scrollWidth,clientWidth:button.clientWidth,scrollHeight:button.scrollHeight,clientHeight:button.clientHeight,font:getComputedStyle(button).font,iconFont:getComputedStyle(button,'::before').font }; });
+        assert.deepEqual([addLayout.x,addLayout.y,addLayout.width,addLayout.height], [(width + 4) / 2,4,(width - 12)/2,height - 8]);
+        assert.equal(addLayout.textFits,true,`${state} at ${width}x${height}: ${JSON.stringify(addLayout)}`);
       }
-      checks.push(`${state} at 40/48/180/240 pixels retains tooltip/accessibility and has no clipping or scrolling`);
+      checks.push(`${state} at 80/88/180/320 pixels retains both compact buttons, tooltip/accessibility and has no clipping or scrolling`);
     }
     await layouts('waiting');
 
@@ -77,9 +86,9 @@ async function main() {
     checks.push('original local PNG icon decodes without remote assets');
     const out = path.join(root, 'test-output');
     await fs.mkdir(out, { recursive: true });
-    await page.setViewportSize({ width: 48, height: 48 });
+    await page.setViewportSize({ width: 88, height: 48 });
     await page.screenshot({ path: path.join(out, 'panel-icon-small.png'), scale: 'css' });
-    await page.setViewportSize({ width: 240, height: 60 });
+    await page.setViewportSize({ width: 320, height: 60 });
     await page.screenshot({ path: path.join(out, 'panel-icon-wide.png'), scale: 'css' });
     await page.screenshot({ path: path.join(out, 'panel-compact.png'), scale: 'css' });
     await button.click();
@@ -125,6 +134,22 @@ async function main() {
     const stageState = await page.evaluate(() => ({ prepared: window.panelTest.prepared.filter(id => id === 'stage-drag').length, completed: window.panelTest.completed.filter(item => item.requestId === 'stage-drag').length }));
     assert.deepEqual(stageState, { prepared: 1, completed: 1 });
     checks.push('stage-drop automatically inserts once while the existing manual button flow remains intact');
+    await addButton.click();
+    assert.equal(await addButton.isDisabled(),true);
+    assert.equal(await button.isDisabled(),true);
+    await page.evaluate(() => window.panelTest.saveResponse(JSON.stringify({version:1,ok:true,file:'C:\\works\\当前作品.fla',name:'当前作品.fla'})));
+    assert.equal(await addButton.textContent(),'正在加入…');
+    await page.evaluate(() => { window.panelTest.importResult={version:1,requestId:'current-document',ok:true,assetId:'current',name:'当前作品'};window.panelTest.tick(); });
+    assert.equal(await addButton.textContent(),'已加入 ✓');
+    assert.match(await addButton.getAttribute('title'),/当前作品/);
+    assert.deepEqual(await page.evaluate(() => window.panelTest.imports),['C:\\works\\当前作品.fla']);
+    checks.push('add-current saves through fixed JSFL, submits saved file once and displays import completion');
+    await addButton.click();
+    await page.evaluate(() => window.panelTest.saveResponse(JSON.stringify({version:1,ok:false,cancelled:true})));
+    assert.equal(await addButton.textContent(),'已取消');
+    assert.equal(await addButton.isEnabled(),true);
+    assert.equal(await page.evaluate(() => window.panelTest.imports.length),1);
+    checks.push('native save cancellation leaves the document out of the import queue');
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(out, 'panel-e2e-result.json'), JSON.stringify({ checks, pageErrors: errors }, null, 2));
     console.log(JSON.stringify({ checks, pageErrors: errors }, null, 2));

@@ -107,6 +107,38 @@ class Queue {
   heartbeat(busy, documentId = null) {
     this.atomic('status.json', { version: 1, updatedAt: Date.now(), app: 'Animate', busy: Boolean(busy), capabilities: { stageDrop: 1, directSource: 1 }, documentId: validDocumentId(documentId) ? documentId : null });
   }
+  documentImportFile(folder, requestId) {
+    if (!/^[a-zA-Z0-9-]{1,80}$/.test(requestId || '')) throw new Error('当前文档请求编号无效');
+    const directory = this.file(path.join('document-import', folder));
+    noLinks(directory);
+    fs.mkdirSync(directory, { recursive: true });
+    return path.join(directory, requestId + '.json');
+  }
+  requestDocumentImport(file) {
+    if (typeof file !== 'string' || file.includes('\0') || !path.isAbsolute(file) || path.extname(file).toLowerCase() !== '.fla') throw new Error('请先保存为本地 FLA 文件');
+    noLinks(file);
+    if (!fs.statSync(file).isFile()) throw new Error('当前 FLA 文件不存在');
+    const request = { version: 1, requestId: crypto.randomBytes(16).toString('hex'), file, createdAt: Date.now() };
+    this.documentImportFile('inbox', request.requestId);
+    this.atomic(path.join('document-import/inbox', request.requestId + '.json'), request);
+    return request;
+  }
+  documentImportResult(requestId) {
+    const file = this.documentImportFile('results', requestId);
+    noLinks(file);
+    if (!fs.existsSync(file)) return null;
+    if (fs.statSync(file).size > 16384) throw new Error('当前文档回执过大');
+    const result = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!result || result.version !== 1 || result.requestId !== requestId || typeof result.ok !== 'boolean') throw new Error('当前文档回执无效');
+    return result;
+  }
+  clearDocumentImport(requestId) {
+    for (const folder of ['inbox', 'results']) {
+      const file = this.documentImportFile(folder, requestId);
+      noLinks(file);
+      try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
   prepare(request) {
     const source = this.validate(request);
     validateDelivery(request, Date.now());

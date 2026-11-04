@@ -82,3 +82,13 @@ The preview worker reads one managed file in an isolated renderer; 128 MB input 
 The CEP extension is also copied outside app.asar to resources/AnimatePlugin so users can install it. The panel reads the fixed AppData root, validates files up to 512 MB with bounded memory, and invokes a guarded JSFL function with JSON input. Its default content area is compact (about 48×48, minimum 40×40) and exposes one paste button; connection, pending, busy, success and failure are represented by that button, with asset/error details available through its title. It opens the single managed FLA directly, exits nested edit mode into the existing scene, inserts the whole source MovieClip at the target frame, then restores the active target and closes the source without saving. Hash namespaces prevent name collisions and reuse exact file duplicates; cross-file symbol content equivalence is not inferred from names.
 
 The delivered CEP runtime is locally self-signed with Adobe ZXPSignCmd. Its mimetype and META-INF/signatures.xml travel with every plugin copy. install.ps1 is outside the signed runtime file set: it validates declared SHA256 payload digests before staging and replaces the whole extension with rollback, retaining backups outside CEP's extension discovery directory. Default installation does not change registry keys or certificate stores; unsigned source development requires explicit EnableDebug. Any signed runtime edit requires regenerating the signature. No signing private key or password is delivered. Signing works around this machine's observed refusal to load the unsigned extension despite correct CEP11 PlayerDebugMode; the reason that development bypass was not honored is not established.
+
+## 0.3.8 当前文档收件桥接与主动复制
+
+`desktop/document-import.cjs`监听`bridge/document-import/inbox`，只消费固定版本的≤16KiB描述，校验本地FLA、大小、路径链接及有效期，串行调用host.importCurrentDocument，再原子写results回执。插件使用固定JSFL入口，二次确认后保存当前文档，仅等待该次回执期间检查结果。管理器退出关闭watcher。已登记managedPath原位reconcile；相同hash仅补充sourcePaths，保留预览设置，外部新内容走普通导入。
+
+`duplicateInFolder`只接受素材ID，读取最新管理文件、选择原始文件夹或用户指定目标；注入的原生确认框同意后使用COPYFILE_EXCL创建中文递增副本并在Explorer选中。拒绝链接及库内目标，取消无文件写入。复制不改变分类或登记新素材。
+
+`desktop/update-check.cjs`只通过Node HTTPS读取固定的GitHub官方latest-release API，8秒截止、256KiB响应上限；正式数字版本与官方发布URL双重验证。合并并发请求，成功缓存10分钟、失败缓存30秒，不使用轮询。三个受限IPC只允许当前窗口检查版本、打开核验过的官方发布页或固定项目主页。渲染器网络仍被阻断，启动检查开关仅存本机。更新提示不下载安装器，也不上传任何库数据。
+
+`desktop/skin.cjs`只记录用户原生选择的本地文件路径与小型skin.json设置，独立于素材索引；不复制媒体。`anshelf://skin/background?rev=...`仅提供当前已选文件，验证格式、大小、链接、版本令牌及GET/HEAD，采用流式Range响应。`ui/skin.mjs`负责遮罩与动态可见性，视频静音；后台暂停、GIF卸载，卡片继续使用实色底。

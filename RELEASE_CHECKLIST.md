@@ -1,5 +1,16 @@
 # Local release checklist
 
+## 0.3.8 release gates
+
+- [x] Two explicit confirmations: copying cancels without index/preview/file changes; AN import cancels before saving or requesting import.
+- [x] Event-driven current-document inbox, bounded descriptors, original-preserving deduplication, missing-source receipts and close lifecycle covered.
+- [x] Optional startup update notification and manual check use one fixed official endpoint; no automatic installation or surviving update daemon. Author/project/Star invitation remain voluntary.
+- [x] Local image/GIF/video backgrounds reference original files, stream range requests, persist small settings and pause on native minimize/blur events.
+- [x] Final 302/302 regression, packaged new-actions 4/update 7/skin 9 journeys, 80-source/6-demo/11-plugin byte audit and exact portable smoke 5/5 after all changes. No page errors.
+- [ ] Chinese installation/share package, signed-plugin and ZIP/SHA verification, desktop shortcut and live-library read-only check.
+- [ ] Authorized source/tag push and verified five-attachment GitHub release, with Chinese download/update instructions.
+- [ ] Complete new CEP button to desktop flow in one live Animate session and Animate 2024 verification remain explicit manual boundaries.
+
 ## 0.3.7 AN 原位编辑与无副本传递门禁
 
 - [x] `package.json` 版本为 0.3.7；`openInAnimate` 首次仅在素材库内同卷重命名，之后始终打开同一管理 FLA，保存后的哈希、预览和发送载荷会在下一次操作前刷新。

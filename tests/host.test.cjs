@@ -410,7 +410,7 @@ test('sandbox preload exposes fixed desktop controls through the existing IPC ch
 
 test('desktop IPC rejects non-string method names before property-key coercion', async () => {
   const app = new EventEmitter();
-  Object.assign(app, { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), getPath: () => 'C:\\AppData', getAppPath: () => path.join(__dirname, '..'), isPackaged: false, quit() {} });
+  Object.assign(app, { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), getVersion: () => '0.3.8', getPath: () => 'C:\\AppData', getAppPath: () => path.join(__dirname, '..'), isPackaged: false, quit() {} });
   let window, handler;
   class FakeWindow {
     constructor() { window = this; this.webContents = { setWindowOpenHandler() {}, on() {} }; }
@@ -418,8 +418,8 @@ test('desktop IPC rejects non-string method names before property-key coercion',
   }
   let imports = 0;
   const api = { snapshot: async () => 'snapshot-ok', revealInFolder: async id => ({ location: 'original', id }), importPaths: async () => { imports++; return true; } };
-  const electron = { app, BrowserWindow: FakeWindow, dialog: { showErrorBox: (title, error) => { throw new Error(title + error); } }, ipcMain: { on() {}, handle: (channel, callback) => { assert.equal(channel, 'shelf:call'); handler = callback; } }, protocol: { registerSchemesAsPrivileged() {}, handle() {} }, session: { defaultSession: { webRequest: { onBeforeRequest() {} } } }, shell: {}, nativeImage: {}, net: {} };
-  const context = { require: name => name === 'electron' ? electron : name === './host.cjs' ? { createHost: async () => ({ api, library: {} }) } : name === './previews.cjs' ? { createRenderer: () => async () => ({}) } : name === './gif-poster.cjs' ? { createGifPoster: () => async () => true } : name.startsWith('./') ? require('../desktop/' + name.slice(2)) : require(name), __dirname: path.join(__dirname, '../desktop'), process: { env: {}, resourcesPath: 'C:\\resources' }, URL, Response };
+  const electron = { app, BrowserWindow: FakeWindow, dialog: { showErrorBox: (title, error) => { throw new Error(title + error); } }, ipcMain: { on() {}, handle: (channel, callback) => { if (channel === 'shelf:call') handler = callback; else assert.ok(['shelf:update-check', 'shelf:update-open', 'shelf:project-open', 'shelf:getSkin', 'shelf:selectSkin', 'shelf:updateSkin', 'shelf:resetSkin'].includes(channel)); } }, protocol: { registerSchemesAsPrivileged() {}, handle() {} }, session: { defaultSession: { webRequest: { onBeforeRequest() {} } } }, shell: {}, nativeImage: {}, net: {} };
+  const context = { require: name => name === 'electron' ? electron : name === './host.cjs' ? { createHost: async () => ({ api, library: {} }) } : name === './skin.cjs' ? { createSkinController: async () => ({}) } : name === './document-import.cjs' ? { createDocumentImportReceiver: async () => ({ close() {} }) } : name === './previews.cjs' ? { createRenderer: () => async () => ({}) } : name === './gif-poster.cjs' ? { createGifPoster: () => async () => true } : name.startsWith('./') ? require('../desktop/' + name.slice(2)) : require(name), __dirname: path.join(__dirname, '../desktop'), process: { env: {}, resourcesPath: 'C:\\resources' }, URL, Response };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, '../desktop/main.cjs'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   const event = { sender: window.webContents };
@@ -448,7 +448,7 @@ test('category APIs forward parent IDs and preserve omitted rename parent', asyn
 
 test('frameless desktop callbacks apply theme, window controls and propagate native open failures', async t => {
   const app = new EventEmitter();
-  Object.assign(app, { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), getPath: () => 'C:\\AppData', getAppPath: () => path.join(__dirname, '..'), isPackaged: false, quit() {} });
+  Object.assign(app, { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), getVersion: () => '0.3.8', getPath: () => 'C:\\AppData', getAppPath: () => path.join(__dirname, '..'), isPackaged: false, quit() {} });
   let options, callbacks, window;
   class FakeWindow {
     constructor(value) { options = value; window = this; this.maximized = false; this.webContents = { setWindowOpenHandler() {}, on() {} }; }
@@ -466,7 +466,7 @@ test('frameless desktop callbacks apply theme, window controls and propagate nat
   let openError = '', revealError = false, openCalls = [], spawnCalls = [], revealed = [];
   const launchProcess = (executable, args, options) => { spawnCalls.push({ executable, args, options }); const child = new EventEmitter(); child.unref = () => {}; queueMicrotask(() => child.emit('spawn')); return child; };
   const electron = { app, BrowserWindow: FakeWindow, dialog: { showErrorBox: (title, error) => { throw new Error(title + error); } }, ipcMain: { on() {}, handle() {} }, protocol: { registerSchemesAsPrivileged() {}, handle() {} }, session: { defaultSession: { webRequest: { onBeforeRequest() {} } } }, shell: { openPath: async file => { openCalls.push(file); return openError; }, showItemInFolder: file => { if (revealError) throw new Error('Explorer failed'); revealed.push(file); } }, nativeImage: {}, net: {} };
-  const context = { require: name => name === 'electron' ? electron : name === 'node:child_process' ? { spawn: launchProcess } : name === './host.cjs' ? { createHost: async value => { callbacks = value; return { api: {}, library: {} }; } } : name === './previews.cjs' ? { createRenderer: () => async () => ({}) } : name === './gif-poster.cjs' ? { createGifPoster: () => async () => true } : name.startsWith('./') ? require('../desktop/' + name.slice(2)) : require(name), __dirname: path.join(__dirname, '../desktop'), process: { env: {}, resourcesPath: 'C:\\resources', platform: process.platform }, URL, Response };
+  const context = { require: name => name === 'electron' ? electron : name === 'node:child_process' ? { spawn: launchProcess } : name === './host.cjs' ? { createHost: async value => { callbacks = value; return { api: {}, library: {} }; } } : name === './skin.cjs' ? { createSkinController: async () => ({}) } : name === './document-import.cjs' ? { createDocumentImportReceiver: async () => ({ close() {} }) } : name === './previews.cjs' ? { createRenderer: () => async () => ({}) } : name === './gif-poster.cjs' ? { createGifPoster: () => async () => true } : name.startsWith('./') ? require('../desktop/' + name.slice(2)) : require(name), __dirname: path.join(__dirname, '../desktop'), process: { env: {}, resourcesPath: 'C:\\resources', platform: process.platform }, URL, Response };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, '../desktop/main.cjs'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(options.frame, false);

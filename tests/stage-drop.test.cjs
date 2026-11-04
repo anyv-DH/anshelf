@@ -41,7 +41,7 @@ function panel(t, { documentId = 42, deferProbe = false } = {}) {
     if (name === 'process') return { env: { APPDATA: f.root } };
     return { Queue: function () { return f.queue; }, localURI: value => 'file:///' + value };
   } }, addEventListener(_name, callback) { unload = callback; } };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugin/panel.js'), 'utf8'), { window, document: { getElementById: () => button }, JSON, decodeURI, setInterval(callback) { tick = callback; return 1; }, clearInterval() {} });
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugin/panel.js'), 'utf8'), { window, document: { getElementById: id => id === 'insert' ? button : null }, JSON, decodeURI, setInterval(callback) { tick = callback; return 1; }, clearInterval() {} });
   t.after(() => unload());
   return { ...f, button, calls, probes, responses, heartbeats, unload: () => unload(), tick: () => tick(), setDocumentId(value) { activeId = value; }, send(request) { f.queue.atomic('pending.json', request); tick(); }, respond(result) { responses.at(-1)(JSON.stringify(result)); } };
 }

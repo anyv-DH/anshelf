@@ -9,6 +9,7 @@
   <title>安安素材管理器</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="brand.css">
+  <link rel="stylesheet" href="skin.css">
 </head>
 <body>
   <header class="titlebar" aria-label="窗口标题栏">
@@ -27,11 +28,13 @@
       <label class="category-search"><span data-icon="search"></span><input id="category-filter" type="search" placeholder="快速找分类" aria-label="筛选分类" autocomplete="off"></label>
       <nav id="categories" class="category-list" aria-label="自定义分类"></nav>
       <div class="sidebar-bottom">
+        <button class="skin-settings-trigger" data-action="skin-settings" title="图片、GIF 或视频底图"><span data-icon="spark"></span>更换皮肤</button>
         <div class="theme-switch" role="group" aria-label="界面色调"><button data-action="theme" data-theme="dark" aria-label="暗色调" aria-pressed="true"><span data-icon="moon"></span>暗色</button><button data-action="theme" data-theme="warm" aria-label="暖色调" aria-pressed="false"><span data-icon="sun"></span>暖色</button></div>
         <button class="bridge-card" data-action="bridge-help">
           <span class="bridge-mark">An</span><span><strong>连接 Adobe Animate</strong><small id="sidebar-bridge">打开 AN 面板即可接收</small></span><span data-icon="chevron"></span>
         </button>
         <div class="local-note"><span class="status-dot"></span> 本地素材 · 安心收藏 <span data-icon="info"></span></div>
+        <button id="app-update" class="app-update" data-action="check-updates" data-state="idle" title="检查安安素材管理器的新版本"><span data-icon="refresh"></span><span id="app-update-label">v0.3.8 · 检查更新</span><span class="update-dot" aria-hidden="true"></span></button>
       </div>
     </aside>
     <main class="main">

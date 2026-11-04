@@ -9,6 +9,7 @@ const paths = {
   down: '<path d="m6 9 6 6 6-6"/>',
   upload: '<path d="M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5"/>',
   file: '<path d="M14 2H5v20h14V7Z"/><path d="M14 2v6h5"/>',
+  copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   check: '<path d="m5 12 4 4L19 6"/>',

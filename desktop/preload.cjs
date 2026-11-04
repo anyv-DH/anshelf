@@ -1,7 +1,17 @@
 /* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
 const {contextBridge,ipcRenderer}=require('electron');
-const methods=['snapshot','sync','importFiles','importFolder','assignCategory','addToCategory','removeFromCategory','undo','createCategory','renameCategory','deleteCategory','setCategoryPinned','updateAsset','removeAssets','retryPreview','send','status','demo','compact','openPluginFolder','openInAnimate','revealInFolder','setTheme','windowAction'];
+const methods=['snapshot','sync','importFiles','importFolder','assignCategory','addToCategory','removeFromCategory','undo','createCategory','renameCategory','deleteCategory','setCategoryPinned','updateAsset','removeAssets','retryPreview','send','status','demo','compact','openPluginFolder','openInAnimate','revealInFolder','duplicateInFolder','setTheme','windowAction'];
 const shelf=Object.fromEntries(methods.map(method=>[method,(...args)=>ipcRenderer.invoke('shelf:call',method,args)]));
+shelf.checkUpdates=options=>ipcRenderer.invoke('shelf:update-check',{manual:options?.manual===true});
+shelf.openUpdatePage=()=>ipcRenderer.invoke('shelf:update-open');
+shelf.openProjectPage=()=>ipcRenderer.invoke('shelf:project-open');
+shelf.onWindowActivity=listener=>{
+  if(typeof listener!=='function')throw new Error('窗口状态回调无效');
+  const handler=(_event,active)=>listener(active===true);
+  ipcRenderer.on('shelf:window-activity',handler);
+  return()=>ipcRenderer.removeListener('shelf:window-activity',handler);
+};
+for(const method of ['getSkin','selectSkin','updateSkin','resetSkin'])shelf[method]=(...args)=>ipcRenderer.invoke('shelf:'+method,...args);
 shelf.startDrag=id=>{ipcRenderer.send('shelf:start-drag',id);};
 shelf.beginStageDrag=id=>ipcRenderer.invoke('shelf:begin-stage-drag',id);
 shelf.endStageDrag=token=>ipcRenderer.invoke('shelf:end-stage-drag',token);

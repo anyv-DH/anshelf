@@ -365,10 +365,11 @@ dialog { max-width: calc(100vw - 35px); max-height: calc(100vh - 60px); }
 .asset-grid { grid-template-columns: repeat(var(--grid-columns, 1), minmax(0, 1fr)); gap: 16px 12px; }
 .card-information { padding-left: 9px; padding-right: 9px; }
 .card-information > .filename-row { position: relative; height: 16px; margin-bottom: 9px; }
-.filename-row h3 { min-width: 0; width: 100%; margin: 0; padding-right: 23px; line-height: 16px; }
+.filename-row h3 { min-width: 0; width: 100%; margin: 0; padding-right: 47px; line-height: 16px; }
 .reveal-button { position: absolute; right: -2px; top: -3px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 5px; color: var(--faint); opacity: 0; }
 .asset-card:hover .reveal-button, .asset-card:focus-within .reveal-button, .reveal-button:focus-visible { opacity: 1; }
 .reveal-button:hover { color: var(--violet); background: var(--hover); }
+.reveal-button.duplicate-button { right: 22px; }
 .card-actions { gap: 5px !important; }
 .card-action { font-size: 8.5px; gap: 3px; padding: 7px 2px; min-width: 0; }
 .card-action svg { width: 12px; height: 12px; }
@@ -413,6 +414,33 @@ dialog { max-width: calc(100vw - 35px); max-height: calc(100vh - 60px); }
 .bridge-card { padding: 9px 7px; }
 .bridge-card small { margin-top: 4px; }
 .local-note { margin: 10px 4px 0; font-size: 8px; }
+.app-update { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 25px; margin-top: 6px; padding: 5px 7px; color: var(--faint); font-size: 9px; border-radius: 6px; text-align: left; }
+.app-update > svg { width: 12px; height: 12px; }
+.app-update:hover { background: var(--hover); color: var(--ink); }
+.app-update[data-state="available"] { color: var(--violet); background: var(--accent-soft); }
+.update-dot { display: none; width: 5px; height: 5px; margin-left: auto; flex: 0 0 5px; background: var(--violet); border-radius: 50%; }
+.app-update[data-state="available"] .update-dot { display: block; }
+.update-meta { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; font-size: 10px; color: var(--faint); }
+.update-version { font-size: 10px; color: var(--faint); }
+.update-status { padding: 13px 15px; margin-top: 17px; border-radius: 10px; background: var(--accent-soft); }
+.update-status strong { font-size: 15px; color: var(--ink); font-weight: 600; }
+.update-status p { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.8; }
+.update-status[data-state="available"] strong { color: var(--violet); }
+.update-guide { margin-top: 18px; font-size: 10px; color: var(--muted); line-height: 1.9; }
+.update-guide > strong { color: var(--ink); font-size: 11px; }
+.update-guide ol { margin: 8px 0 0; padding-left: 19px; }
+.update-guide li { padding: 0 0 6px 2px; }
+.update-guide b { font-weight: 600; color: var(--ink); }
+.update-preference { display: flex; align-items: flex-start; gap: 8px; margin-top: 13px; color: var(--ink); font-size: 10px; line-height: 1.7; cursor: pointer; }
+.update-preference input { accent-color: var(--violet); margin: 2px 0 0; }
+.update-preference small { display: block; color: var(--faint); font-size: 9px; }
+.update-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
+.update-footnote { margin: 12px 0 0; color: var(--faint); font-size: 9px; line-height: 1.7; }
+.update-support { margin-top: 13px; padding-top: 11px; border-top: 1px solid var(--line); }
+.update-project-link { max-width: 100%; padding: 0; color: var(--violet); font-size: 10px; line-height: 1.7; text-align: left; overflow-wrap: anywhere; }
+.update-project-link:hover { text-decoration: underline; }
+.update-project-link:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; border-radius: 2px; }
+.update-support p { margin: 6px 0 0; color: var(--muted); font-size: 10px; line-height: 1.8; }
 .import-entries { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .import-entries .button { min-height: 31px; padding: 6px 10px; font-size: 10px; gap: 5px; white-space: nowrap; }
 .import-entries svg { width: 14px; height: 14px; }

@@ -1,0 +1,36 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+#skin-background{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;--skin-opacity:.55;display:none;background:var(--bg)}
+.has-custom-skin #skin-background{display:block}
+.skin-background-media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.skin-background-shade{position:absolute;inset:0;background:var(--bg);opacity:var(--skin-opacity);pointer-events:none}
+.has-custom-skin body{background:transparent}
+.has-custom-skin .titlebar,.has-custom-skin .app-shell{position:relative;z-index:1}
+.has-custom-skin .titlebar{background:color-mix(in srgb,var(--sidebar) 58%,transparent)}
+.has-custom-skin .sidebar{background:color-mix(in srgb,var(--sidebar) 66%,transparent)}
+.has-custom-skin .main{background:transparent}
+.has-custom-skin .asset-card{background:var(--surface)}
+.skin-settings-trigger{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;min-height:32px;margin:8px 0 4px;border:1px solid var(--line);border-radius:8px;background:var(--accent-soft);color:var(--muted);font-size:11px}
+.skin-settings-trigger:hover{background:var(--surface-2);color:var(--ink)}
+.skin-settings-trigger svg{width:15px;height:15px}
+#skin-dialog{width:min(570px,calc(100vw - 36px));max-height:calc(100vh - 48px);padding:27px 29px;border:1px solid var(--line);border-radius:20px;color:var(--ink);background:var(--surface);box-shadow:0 30px 90px var(--shadow);overflow:auto}
+#skin-dialog::backdrop{background:#09071199}
+.skin-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+.skin-heading h2{font-size:23px;margin:5px 0 12px;letter-spacing:.5px}
+.skin-eyebrow{font-size:11px;color:var(--accent);margin:0;letter-spacing:.5px}
+.skin-close{font-size:23px;line-height:1;flex:none}
+.skin-description{font-size:13px;line-height:1.8;color:var(--muted);margin:0 0 20px}
+.skin-current{display:flex;gap:13px;align-items:center;background:var(--surface-2);border:1px solid var(--line);border-radius:13px;padding:16px;margin-bottom:15px}
+.skin-current-dot{width:34px;height:34px;flex:none;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--green));opacity:.8}
+.skin-current-name{font-size:14px;font-weight:600}
+.skin-current-status{font-size:11px;color:var(--muted);margin:5px 0 0;line-height:1.7}
+.skin-choice-row{display:flex;gap:10px;margin-bottom:25px}
+.skin-choice-row button{min-height:37px;flex:1}
+.skin-opacity-label{display:flex;justify-content:space-between;margin-bottom:12px;font-size:12px;font-weight:600}
+#skin-opacity{width:100%;accent-color:var(--accent);height:20px;margin:0;cursor:pointer}
+.skin-opacity-hints{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin:6px 0 23px}
+.skin-animation{display:flex;align-items:flex-start;gap:11px;font-size:12px;line-height:1.5;cursor:pointer}
+.skin-animation input{accent-color:var(--accent);width:15px;height:15px;flex:none;margin:2px 0 0}
+.skin-animation small{display:block;font-size:11px;color:var(--muted);margin-top:5px;line-height:1.7}
+.skin-format-note{font-size:10px;line-height:1.9;color:var(--faint);margin:22px 0 0;padding-top:16px;border-top:1px solid var(--line)}
+.skin-error{font-size:12px;color:var(--danger);line-height:1.8;background:var(--surface-2);border-radius:8px;padding:10px 12px;margin:15px 0 0}
+@media(max-width:760px){#skin-dialog{padding:23px 21px}.skin-heading h2{font-size:21px}}

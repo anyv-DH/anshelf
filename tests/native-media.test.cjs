@@ -134,10 +134,10 @@ test('desktop integrates streaming media, safe poster lookup, mode filters and a
   await fs.mkdir(path.join(library.root, 'previews'));
   library.asset.previewPosterPath = 'previews/known-poster.png';
   await fs.writeFile(path.join(library.root, library.asset.previewPosterPath), 'poster-fixture');
-  let callbacks, protocolHandler, callHandler, dragHandler, privileged, window;
+  let callbacks, protocolHandler, callHandler, dragHandler, privileged, window, documentReceiverClosed = false;
   const fetched = [], dragCalls = [], picked = [];
   const app = new EventEmitter();
-  Object.assign(app, { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), getPath: () => library.root, getAppPath: () => path.join(__dirname, '..'), isPackaged: false, quit() {} });
+  Object.assign(app, { requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(), getVersion: () => '0.3.8', getPath: () => library.root, getAppPath: () => path.join(__dirname, '..'), isPackaged: false, quit() {} });
   class FakeWindow {
     constructor() { window = this; this.webContents = { setWindowOpenHandler() {}, on() {}, send() {}, startDrag(item) { dragCalls.push(item); } }; }
     isDestroyed() { return false; }
@@ -145,7 +145,7 @@ test('desktop integrates streaming media, safe poster lookup, mode filters and a
   }
   const host = { api: { prepareDrag: async () => ({ file: '/private/known.mp3', kind: 'audio' }) }, library };
   const electron = { app, BrowserWindow: FakeWindow, dialog: { showOpenDialog: async (_win, options) => { picked.push(options); return { canceled: true, filePaths: [] }; }, showErrorBox: (_title, message) => { throw new Error(message); } },
-    ipcMain: { handle(_channel, handler) { callHandler = handler; }, on(_channel, handler) { dragHandler = handler; } },
+    ipcMain: { handle(channel, handler) { if (channel === 'shelf:call') callHandler = handler; }, on(_channel, handler) { dragHandler = handler; } },
     protocol: { registerSchemesAsPrivileged(value) { privileged = value; }, handle(_scheme, handler) { protocolHandler = handler; } },
     session: { defaultSession: { webRequest: { onBeforeRequest() {} } } }, shell: {}, nativeImage: { createFromPath: () => ({ resize: () => ({ size: 32 }) }) },
     net: { fetch: async url => { fetched.push(url); return new Response('poster-fixture'); } },
@@ -155,6 +155,8 @@ test('desktop integrates streaming media, safe poster lookup, mode filters and a
     if (name === './host.cjs') return { createHost: async value => { callbacks = value; return host; } };
     if (name === './previews.cjs') return { createRenderer: () => async () => ({}) };
     if (name === './gif-poster.cjs') return { createGifPoster: () => async () => true };
+    if (name === './skin.cjs') return { createSkinController: async () => ({}) };
+    if (name === './document-import.cjs') return { createDocumentImportReceiver: async () => ({ close() { documentReceiverClosed = true; } }) };
     if (name.startsWith('./')) return require(path.join(__dirname, '../desktop', name));
     if (name.startsWith('../')) return require(path.join(__dirname, '../desktop', name));
     return require(name);
@@ -180,4 +182,6 @@ test('desktop integrates streaming media, safe poster lookup, mode filters and a
   await assert.rejects(callHandler({ sender: window.webContents }, 'prepareDrag', ['known-audio']), /不允许/);
   await dragHandler({ sender: window.webContents }, 'known-audio');
   assert.equal(dragCalls[0].file, '/private/known.mp3');
+  app.emit('before-quit');
+  assert.equal(documentReceiverClosed, true);
 });

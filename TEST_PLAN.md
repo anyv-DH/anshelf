@@ -1,5 +1,15 @@
 # Test plan
 
+## 0.3.8 confirmations, current-document import, updates and skins
+
+`tests/duplicate-file.test.cjs` uses real temporary files to check latest saved content, readable collision-safe names, audio extensions, invalid directories, links and confirmation cancellation. The cancellation regression edits the managed FLA first, then checks the entire index, preview count, files and Explorer callback remain unchanged. `tests/document-import.test.cjs` exercises event-driven inbox processing, duplicate-content settings preservation, registered managed-file updates, invalid requests, missing sources/dependencies, receipts and close behavior.
+
+`tests/update-check.test.cjs` checks numeric stable version comparison, fixed official release URLs, concurrent request sharing/cache, offline handling, shutdown cancellation and sender-checked official links. `tests/skin.test.cjs` checks original-file references, tiny persisted settings, cancellation/reset, allowed formats/sizes, links, missing files and streaming Range/HEAD responses.
+
+Run `scripts/new-actions-e2e.cjs`, `scripts/update-ui-e2e.cjs` and `scripts/skin-ui-e2e.cjs` against the final unpacked executable via `ANSHELF_UI_EXECUTABLE`. The skin journey decodes real PNG, GIF and WebM fixtures and actually minimizes/restores the window and changes focus to prove dynamic playback stops. The update journey supplies release metadata through a test-only IPC replacement and verifies the Chinese guide, author/project link, automatic-check preference and offline search. It does not create a fake public release. Normal GitHub checking is also verified separately against the fixed public endpoint.
+
+Actual Animate 2023 verification covers the fixed JSFL current-document confirmation/save: cancel leaves the saved file unchanged; confirm persists the new element. Browser CEP and Electron inbox journeys cover their respective halves. These are not an assertion that the entire new CEP-button-to-manager chain has been verified in one live AN session, nor an Animate 2024 verification. Existing stage insertion remains a separate host acceptance boundary.
+
 ## 0.3.7 single-file editing and no-copy stage delivery
 
 `tests/host.test.cjs` verifies open, save, reopen, restart, preview refresh and subsequent send all use the same managed FLA path; no per-open file is created. `tests/bridge.test.cjs` verifies version-2 requests hash the source in 1 MiB chunks, never read the FLA as a single Buffer, create no `bridge/temp` file, and reject an older connected CEP panel. The receiver removes stale version-1 requests. JSFL contract tests verify direct managed-source opening, reject a source already open in Animate before document mutation, close an opened source with `save=false`, and preserve target frame/layers. These automated tests do not replace a manual Animate 2023/2024 insertion check with the re-signed 0.3.7 panel.

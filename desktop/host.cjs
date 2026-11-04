@@ -8,6 +8,7 @@ const {Bridge,resolveManagedPath}=require('../core/bridge.cjs');
 const {sha256}=require('../core/files.cjs');
 const {PreviewQueue}=require('../core/preview.cjs');
 const {createSync}=require('./host-sync.cjs');
+const {duplicateFile,isWithin}=require(path.join(__dirname,'duplicate-file.cjs'));
 
 function animateFilename(asset) {
   let stem = String(asset.name || asset.originalName || '未命名素材').replace(/\.fla$/i, '')
@@ -34,7 +35,7 @@ async function isOriginalFile(file,asset){
   }catch{return false;}
 }
 
-async function createHost({root,render,validateImage=async()=>true,createPoster=async()=>false,pickFiles=async()=>[],pickFolder=async()=>[],compact=async()=>false,openPluginFolder=async()=>{},openInAnimate=async()=>{throw new Error('当前环境无法打开 Animate');},revealFile=async()=>{throw new Error('当前环境无法打开文件所在位置');},setTheme=async theme=>theme,windowAction=async()=>({maximized:false}),previewUrl=id=>`anshelf://preview/${id}`,mediaUrl=id=>`anshelf://media/${id}`,posterUrl=id=>`anshelf://poster/${id}`,demoPath=path.join(__dirname,'../demo')}){
+async function createHost({root,render,validateImage=async()=>true,createPoster=async()=>false,pickFiles=async()=>[],pickFolder=async()=>[],pickDuplicateFolder=async()=>[],confirmDuplicate=async()=>true,compact=async()=>false,openPluginFolder=async()=>{},openInAnimate=async()=>{throw new Error('当前环境无法打开 Animate');},revealFile=async()=>{throw new Error('当前环境无法打开文件所在位置');},setTheme=async theme=>theme,windowAction=async()=>({maximized:false}),previewUrl=id=>`anshelf://preview/${id}`,mediaUrl=id=>`anshelf://media/${id}`,posterUrl=id=>`anshelf://poster/${id}`,demoPath=path.join(__dirname,'../demo')}){
   const library=await Library.open(root);const bridge=new Bridge(root);
   const queue=new PreviewQueue(library,render);
   const snapshot=async(status={})=>{const data=library.snapshot();return{...data,assets:data.assets.map(a=>({...a,
@@ -78,6 +79,33 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     queue.add(pending,true);
     return result;
   }
+  async function importCurrentDocument(file){
+    if(!await isOriginalFile(file,{kind:'fla'}))throw new Error('请选择已保存、存在且不含链接的 FLA 文件路径');
+    const canonical=await nativeFs.realpath(file);
+    const canonicalRoot=await nativeFs.realpath(bridge.root);
+    if(isWithin(canonicalRoot,canonical)){
+      const existing=library.snapshot().assets.find(a=>path.relative(path.resolve(canonicalRoot,a.managedPath),canonical)==='');
+      if(!existing)throw new Error('该文件位于素材库内，但尚未登记，不能从插件重复导入');
+      const reconciled=await library.reconcileManagedFile(existing.id);
+      if(reconciled.contentChanged)queue.add([reconciled.asset],true);
+      return{assetId:existing.id,name:reconciled.asset.name,updated:reconciled.contentChanged,duplicate:true};
+    }
+    // Re-adding an existing effect must not change it to ordinary or clear its categories.
+    const hash=await sha256(canonical);
+    const existing=library.snapshot().assets.find(a=>a.kind!=='audio'&&a.hash===hash);
+    if(existing){
+      return library.change(state=>{
+        const asset=state.assets.find(a=>a.id===existing.id&&a.hash===hash);
+        if(!asset)throw new Error('素材库记录已变化，请重新加入当前文档');
+        if(!asset.sourcePaths.includes(canonical))asset.sourcePaths.push(canonical);
+        return{assetId:asset.id,name:asset.name,updated:false,duplicate:true};
+      },false);
+    }
+    const result=await importPaths([canonical],{mode:'ordinary',preferExistingPreview:true});
+    const asset=result.assets?.[0];
+    if(!asset)throw new Error(result.failed?.[0]?.error||'当前文档未能加入素材库');
+    return{assetId:asset.id,name:asset.name,updated:false,duplicate:result.added===0};
+  }
   const api={
     snapshot:()=>snapshot(),sync,
     importFiles:async(options={})=>importPaths(await pickFiles(options),options),
@@ -109,6 +137,29 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
       }catch(error){throw new Error('原始文件不可用，库中副本也无法定位：'+error.message);}
       await revealFile(file);return{location:'managed'};
     },
+    duplicateInFolder:async(id)=>{
+      const a=typeof id==='string'?library.getAsset(id):null;
+      if(!a)throw new Error('请选择素材库中存在的素材');
+      const managed=resolveManagedPath(bridge.root,a.managedPath,'assets');
+      const extension=path.extname(managed).toLowerCase();
+      if(a.kind==='audio'?!AUDIO_EXTENSIONS.includes(extension):extension!=='.fla')throw new Error('受管理素材文件格式无效，FLA或音频格式不匹配');
+      if(a.kind==='audio'&&extension!==a.extension)throw new Error('音频扩展名与记录不一致');
+      let directory=null;
+      for(const source of a.sourcePaths){
+        if(await isOriginalFile(source,a)&&!isWithin(bridge.root,source)){directory=path.dirname(source);break;}
+      }
+      if(!directory){
+        const selected=await pickDuplicateFolder();
+        directory=Array.isArray(selected)?selected[0]:selected;
+        if(!directory)return{cancelled:true};
+      }
+      if(!await confirmDuplicate({name:a.name||a.originalName,directory,extension}))return{cancelled:true};
+      // Reconcile saved AN edits only after confirmation; cancelling must be read-only.
+      const {file}=await validatedAsset(id);
+      const duplicate=await duplicateFile({source:file,directory,name:a.name||a.originalName,extension:path.extname(file).toLowerCase(),excludedRoot:bridge.root});
+      await revealFile(duplicate);
+      return{file:duplicate,cancelled:false};
+    },
     openInAnimate:async(id)=>{
       const a=library.getAsset(id);if(!a)throw new Error('请先选择一个素材');
       if(a.kind==='audio')throw new Error('只能在 AN 中打开 FLA 素材，音频请拖入AN');
@@ -121,6 +172,6 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     demo:async()=>importPaths([demoPath],{preferExistingPreview:true}),compact,openPluginFolder
   };
   queue.add(library.snapshot().assets.filter(a=>a.previewStatus==='pending'));
-  return{api,library,bridge,queue,root};
+  return{api,library,bridge,queue,root,importCurrentDocument};
 }
 module.exports={createHost,animateFilename};

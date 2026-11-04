@@ -7,8 +7,8 @@
 - [x] Optional startup update notification and manual check use one fixed official endpoint; no automatic installation or surviving update daemon. Author/project/Star invitation remain voluntary.
 - [x] Local image/GIF/video backgrounds reference original files, stream range requests, persist small settings and pause on native minimize/blur events.
 - [x] Final 302/302 regression, packaged new-actions 4/update 7/skin 9 journeys, 80-source/6-demo/11-plugin byte audit and exact portable smoke 5/5 after all changes. No page errors.
-- [ ] Chinese installation/share package, signed-plugin and ZIP/SHA verification, desktop shortcut and live-library read-only check.
-- [ ] Authorized source/tag push and verified five-attachment GitHub release, with Chinese download/update instructions.
+- [x] Chinese share ZIP 195.5MiB, 49-file SHA/CRC and 9 plugin signature digests pass; top-level Chinese installation guide present. Desktop points to final 0.3.8; runtime ASAR matches, live library remains 288 assets/11 categories with unchanged hash.
+- [x] Source `2a5254c` and `v0.3.8` pushed; official release public/latest and all five attachment sizes/SHA256 verified. Chinese download/update instructions present.
 - [ ] Complete new CEP button to desktop flow in one live Animate session and Animate 2024 verification remain explicit manual boundaries.
 
 ## 0.3.7 AN 原位编辑与无副本传递门禁

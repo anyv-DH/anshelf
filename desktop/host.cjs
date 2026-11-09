@@ -8,8 +8,10 @@ const {Bridge,resolveManagedPath}=require('../core/bridge.cjs');
 const {sha256}=require('../core/files.cjs');
 const {PreviewQueue}=require('../core/preview.cjs');
 const {createSync}=require('./host-sync.cjs');
-const {duplicateFile,isWithin}=require(path.join(__dirname,'duplicate-file.cjs'));
+const {isWithin}=require(path.join(__dirname,'duplicate-file.cjs'));
 const {locateManagedFile}=require('../core/managed-file-recovery.cjs');
+const {importedAsset,samePath}=require('../core/independent-copy.cjs');
+const {documentImportOptions}=require('../core/document-import-options.cjs');
 
 function animateFilename(asset) {
   let stem = String(asset.name || asset.originalName || '未命名素材').replace(/\.fla$/i, '')
@@ -62,6 +64,13 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
   }
   async function importPaths(paths,options={}){
     if(!Array.isArray(paths)||paths.some(p=>typeof p!=='string'))throw new Error('导入路径无效');
+    // Explicitly selecting an already registered managed file must keep its
+    // identity. The recursive importer still excludes the whole library root.
+    const knownAssets=library.snapshot().assets;
+    for(const file of paths){
+      const known=knownAssets.find(a=>samePath(path.resolve(library.root,a.managedPath),file));
+      if(known)await validatedAsset(known.id);
+    }
     const result=await library.importPaths(paths,{mode:options.mode===undefined?'ordinary':options.mode,preferExistingPreview:options.preferExistingPreview!==false,previewResolution:options.previewResolution,categoryId:options.categoryId});
     for(const a of result.assets||[])if(a.previewStatus==='ready'&&a.previewOrigin==='sidecar'){
       let valid=false;
@@ -79,29 +88,33 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
     queue.add(pending,true);
     return result;
   }
-  async function importCurrentDocument(file){
+  async function importCurrentDocument(file,value){
+    const options=documentImportOptions(value);
     if(!await isOriginalFile(file,{kind:'fla'}))throw new Error('请选择已保存、存在且不含链接的 FLA 文件路径');
     const canonical=await nativeFs.realpath(file);
     const canonicalRoot=await nativeFs.realpath(bridge.root);
     if(isWithin(canonicalRoot,canonical)){
       const existing=library.snapshot().assets.find(a=>path.relative(path.resolve(canonicalRoot,a.managedPath),canonical)==='');
       if(!existing)throw new Error('该文件位于素材库内，但尚未登记，不能从插件重复导入');
+      const configured=await library.configureDocumentImport(existing.id,options);
       const reconciled=await library.reconcileManagedFile(existing.id);
-      if(reconciled.contentChanged)queue.add([reconciled.asset],true);
-      return{assetId:existing.id,name:reconciled.asset.name,updated:reconciled.contentChanged,duplicate:true};
+      if(reconciled.contentChanged||configured.previewChanged)queue.add([reconciled.asset],true);
+      return{assetId:existing.id,name:reconciled.asset.name,updated:reconciled.contentChanged||configured.previewChanged,duplicate:true};
     }
     // Re-adding an existing effect must not change it to ordinary or clear its categories.
     const hash=await sha256(canonical);
-    const existing=library.snapshot().assets.find(a=>a.kind!=='audio'&&a.hash===hash);
+    const existing=importedAsset(library.snapshot().assets,library.root,canonical,hash,'fla');
     if(existing){
+      const configured=await library.configureDocumentImport(existing.id,options);
+      if(configured.previewChanged)queue.add([configured.asset],true);
       return library.change(state=>{
         const asset=state.assets.find(a=>a.id===existing.id&&a.hash===hash);
         if(!asset)throw new Error('素材库记录已变化，请重新加入当前文档');
         if(!asset.sourcePaths.includes(canonical))asset.sourcePaths.push(canonical);
-        return{assetId:asset.id,name:asset.name,updated:false,duplicate:true};
+        return{assetId:asset.id,name:asset.name,updated:configured.previewChanged,duplicate:true};
       },false);
     }
-    const result=await importPaths([canonical],{mode:'ordinary',preferExistingPreview:true});
+    const result=await importPaths([canonical],{mode:'ordinary',preferExistingPreview:true,...options,categoryId:options?.categoryId||undefined});
     const asset=result.assets?.[0];
     if(!asset)throw new Error(result.failed?.[0]?.error||'当前文档未能加入素材库');
     return{assetId:asset.id,name:asset.name,updated:false,duplicate:result.added===0};
@@ -136,7 +149,7 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
         file=resolveManagedPath(bridge.root,a.managedPath,'assets');
         if(a.kind==='audio'?!AUDIO_EXTENSIONS.includes(path.extname(file).toLowerCase()):path.extname(file).toLowerCase()!=='.fla')throw new Error('受管理副本必须是 FLA 或受支持音频文件');
       }catch(error){throw new Error('原始文件不可用，库中副本也无法定位：'+error.message);}
-      await revealFile(file);return{location:'managed'};
+      await revealFile(file);return{location:'managed',...(a.independentCopy?{independentCopy:true}:{})};
     },
     duplicateInFolder:async(id)=>{
       const a=typeof id==='string'?library.getAsset(id):null;
@@ -145,21 +158,16 @@ async function createHost({root,render,validateImage=async()=>true,createPoster=
       const extension=path.extname(managed).toLowerCase();
       if(a.kind==='audio'?!AUDIO_EXTENSIONS.includes(extension):extension!=='.fla')throw new Error('受管理素材文件格式无效，FLA或音频格式不匹配');
       if(a.kind==='audio'&&extension!==a.extension)throw new Error('音频扩展名与记录不一致');
-      let directory=null;
-      for(const source of a.sourcePaths){
-        if(await isOriginalFile(source,a)&&!isWithin(bridge.root,source)){directory=path.dirname(source);break;}
-      }
-      if(!directory){
-        const selected=await pickDuplicateFolder();
-        directory=Array.isArray(selected)?selected[0]:selected;
-        if(!directory)return{cancelled:true};
-      }
+      const directory=path.join(library.root,'assets');
       if(!await confirmDuplicate({name:a.name||a.originalName,directory,extension}))return{cancelled:true};
       // Reconcile saved AN edits only after confirmation; cancelling must be read-only.
-      const {file}=await validatedAsset(id);
-      const duplicate=await duplicateFile({source:file,directory,name:a.name||a.originalName,extension:path.extname(file).toLowerCase(),excludedRoot:bridge.root});
-      await revealFile(duplicate);
-      return{file:duplicate,cancelled:false};
+      await validatedAsset(id);
+      const copy=await library.duplicateAsset(id);
+      if(copy.previewStatus==='pending')queue.add([copy],true);
+      const file=library.assetPath(copy.id);
+      let revealError=null;
+      try{await revealFile(file);}catch(error){revealError=error.message;}
+      return{file,assetId:copy.id,name:copy.name,cancelled:false,revealError};
     },
     openInAnimate:async(id)=>{
       const a=library.getAsset(id);if(!a)throw new Error('请先选择一个素材');

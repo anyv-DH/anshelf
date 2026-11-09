@@ -2,7 +2,7 @@
 import { call } from './api.js';
 import { icon } from './icons.js';
 import { assetCategoryIds, assetMode, categoryDescendantIds, escapeHtml as e, gridColumns, isLiked, selectAsset } from './model.js';
-import { categoryOptions, previewDialog, renderGrid, renderInspector, renderSelection, renderSidebar, renderStatus, renderSubcategories } from './render.js';
+import { categoryOptions, previewDialog, renderGrid, renderInspector as renderInspectorView, renderSelection, renderSidebar, renderStatus, renderSubcategories } from './render.js';
 import { categoryBrowser, favoriteCategoryGroups } from './category-browser.mjs';
 import { mountPreviewViewer } from './preview-viewer.mjs';
 import { createAudioController, formatTime } from './audio-controller.mjs';
@@ -12,11 +12,26 @@ import { planRemoval } from './removal.mjs';
 import { createConfirmation } from './confirmation.mjs';
 import { mountPluginControls } from './plugin-controls.mjs';
 import { mountUpdateDownloadControls } from './update-download-controls.mjs';
+import { mountCategorySelects } from './category-select.mjs';
 
 const state = { snapshot: { assets: [], categories: [], queue: {}, bridge: {} }, category: 'all', favoriteCategory: 'all', typeScope: 'all', query: '', categoryQuery: '', collapsedCategories: new Set(), sort: 'newest', density: 'auto', hideChildCategories: false, importMode: 'ordinary', importCategoryId: undefined, selected: new Set(), anchor: null, detail: null, inspectorOpen: false, quickCategories: false, busy: false, visible: [], receivedSnapshot: false };
 let toastTimer, disposeViewer, seekingAudio = false, syncVersion, refreshPromise, refreshTimer, refreshStopped = false;
-let updateTimer, updatePromise, updateResult = { currentVersion: '0.3.9', status: 'idle' }, checkUpdatesOnStart = true;
+let updateTimer, updatePromise, updateResult = { currentVersion: '0.3.10', status: 'idle' }, checkUpdatesOnStart = true;
 const $ = selector => document.querySelector(selector);
+const categorySelects = mountCategorySelects({ document });
+window.addEventListener('beforeunload', () => categorySelects.dispose(), { once: true });
+function renderInspector(value) {
+  const inspector = $('#inspector');
+  if (value.inspectorOpen && inspector.dataset.asset === value.detail && categorySelects.isOpenWithin(inspector)) return;
+  const focused = document.activeElement;
+  const focusedSelect = value.inspectorOpen && inspector.dataset.asset === value.detail
+    && inspector.contains(focused) && focused.matches('[data-select-trigger]') ? focused.dataset.selectTrigger : null;
+  if (categorySelects.isOpenWithin(inspector)) categorySelects.close();
+  renderInspectorView(value);
+  categorySelects.enhance(inspector);
+  if (focusedSelect) Array.from(inspector.querySelectorAll('[data-select-trigger]'))
+    .find(trigger => trigger.dataset.selectTrigger === focusedSelect)?.focus({ preventScroll: true });
+}
 const audio = createAudioController({ onChange: updateAudioUI });
 const skinControls = mountSkin({ api: window.shelf, document });
 const confirmation = createConfirmation({ document });
@@ -122,7 +137,7 @@ async function run(method, ...args) {
 }
 
 function disposePreview() { disposeViewer?.(); disposeViewer = null; }
-function closeDialog() { const dialog = $('#dialog'); disposePreview(); if (dialog.open) dialog.close(); dialog.classList.remove('preview-dialog'); delete $('#dialog-content').dataset.importMode; }
+function closeDialog() { const dialog = $('#dialog'); categorySelects.close(); disposePreview(); if (dialog.open) dialog.close(); dialog.classList.remove('preview-dialog'); delete $('#dialog-content').dataset.importMode; }
 function openPreview(id) {
   const asset = state.snapshot.assets.find(item => item.id === id); if (!asset) return;
   closeDialog();
@@ -133,7 +148,7 @@ function openPreview(id) {
 function renderUpdateBadge() {
   const button = $('#app-update'), available = updateResult.status === 'available';
   button.dataset.state = available ? 'available' : updateResult.status;
-  $('#app-update-label').textContent = available ? `发现新版 ${updateResult.latestVersion || ''}` : `v${updateResult.currentVersion || '0.3.9'} · 检查更新`;
+  $('#app-update-label').textContent = available ? `发现新版 ${updateResult.latestVersion || ''}` : `v${updateResult.currentVersion || '0.3.10'} · 检查更新`;
   button.title = available ? `有新版 ${updateResult.latestVersion}，点击查看下载和更新方法` : '检查安安素材管理器的新版本';
 }
 function renderUpdateDialog() {
@@ -147,7 +162,7 @@ function renderUpdateDialog() {
     : ['暂时无法检查新版', '网络暂不可用，稍后可重试；本地素材和日常使用不受影响。'];
   $('#update-status').dataset.state = status;
   $('#update-status').innerHTML = `<strong>${e(copy[0])}</strong><p>${e(copy[1])}</p>`;
-  $('#update-current-version').textContent = `当前版本 v${updateResult.currentVersion || '0.3.9'}`;
+  $('#update-current-version').textContent = `当前版本 v${updateResult.currentVersion || '0.3.10'}`;
   const retry = panel.querySelector('[data-action="retry-update-check"]');
   retry.disabled = status === 'checking';
   retry.textContent = status === 'checking' ? '检查中…' : '重新检查';
@@ -217,6 +232,7 @@ function openImportDialog(mode = 'ordinary', { preserveTarget = false, settings 
     if ($('#custom-preview-resolution')) $('#custom-preview-resolution').checked = !!settings.customPreview;
     if ($('#preview-resolution')) { $('#preview-resolution').value = String(settings.previewResolution || 512); $('#preview-resolution').disabled = !settings.customPreview; }
   }
+  categorySelects.enhance($('#dialog-content'));
   $('#dialog').showModal();
 }
 function openImportFolderForm(parentId = null) {
@@ -248,6 +264,7 @@ function openCategoryDialog(id = '', parentId = '', scope = state.typeScope) {
     $('#category-parent').closest('label').insertAdjacentHTML('afterend', `<label class="dialog-label">所属素材类型<select id="category-scope"><option value="all" ${currentScope === 'all' ? 'selected' : ''}>所有素材</option><option value="ordinary" ${currentScope === 'ordinary' ? 'selected' : ''}>普通素材</option><option value="effect" ${currentScope === 'effect' ? 'selected' : ''}>特效素材</option><option value="audio" ${currentScope === 'audio' ? 'selected' : ''}>音频素材</option></select><small>选择上级分类时，自动沿用上级的素材类型。</small></label>`);
     syncCategoryScope();
   }
+  categorySelects.enhance($('#dialog-content'));
   $('#dialog').showModal(); $('#category-name').focus();
 }
 
@@ -256,6 +273,7 @@ function syncCategoryScope() {
   const parent = state.snapshot.categories.find(item => item.id === $('#category-parent')?.value);
   input.disabled = !!parent;
   if (parent) input.value = parent.scope || 'all';
+  categorySelects.enhance($('#dialog-content'));
 }
 function openBridgeDialog() {
   const bridge = state.snapshot.bridge || {};
@@ -377,14 +395,33 @@ async function revealFile(id) {
   const asset = state.snapshot.assets.find(item => item.id === id); if (!asset) return;
   try {
     const result = await call('revealInFolder', asset.id);
-    if (result?.location === 'managed') toast('原文件已不在原位置，已定位素材库副本');
+    if (result?.independentCopy) toast('已定位这份独立素材文件');
+    else if (result?.location === 'managed') toast('原文件已不在原位置，已定位素材库副本');
   } catch (error) { errorToast(error); }
 }
 async function duplicateFile(id) {
   try {
     const result = await run('duplicateInFolder', id);
-    if (!result?.cancelled) toast('已复制一份新文件，并在资源管理器中选中');
+    if (result?.cancelled) return;
     await refresh();
+    const asset = state.snapshot.assets.find(item => item.id === result?.assetId);
+    if (!asset) { toast('复制已完成，请您刷新素材库查看'); return; }
+    closeDialog();
+    state.query = ''; $('#search').value = ''; state.hideChildCategories = false;
+    const mode = assetMode(asset), memberships = assetCategoryIds(asset);
+    const currentCategory = state.snapshot.categories.find(item => item.id === state.category);
+    const inCurrentCategory = currentCategory && memberships.some(categoryId => categoryDescendantIds(state.snapshot.categories, currentCategory.id).has(categoryId));
+    const typedView = { ordinary: 'ordinary', effects: 'effect', audio: 'audio' }[state.category];
+    if (!(state.category === 'all' || inCurrentCategory || typedView === mode || (state.category === 'uncategorized' && !memberships.length))) {
+      state.category = memberships[0] || ({ ordinary: 'ordinary', effect: 'effects', audio: 'audio' })[mode];
+    }
+    if (state.typeScope !== 'all' && state.typeScope !== mode) state.typeScope = mode;
+    state.favoriteCategory = 'all'; state.quickCategories = false;
+    state.selected = new Set([asset.id]); state.anchor = asset.id; state.detail = asset.id; state.revealAssetId = asset.id;
+    renderAll();
+    const card = $(`[data-asset="${CSS.escape(asset.id)}"]`);
+    card?.scrollIntoView({ block: 'nearest' }); card?.focus({ preventScroll: true });
+    toast(`已复制“${asset.name}”并加入素材库 · 可独立编辑`);
   } catch { /* run already reported */ }
 }
 function setTheme(theme) {
@@ -610,7 +647,7 @@ document.addEventListener('focusin', event => hoverAnimation(event, true));
 document.addEventListener('focusout', event => hoverAnimation(event, false));
 document.addEventListener('change', event => {
   if (event.target.matches('[data-field]')) updateField(event.target);
-  if (event.target.id === 'custom-preview-resolution') $('#preview-resolution').disabled = !event.target.checked;
+  if (event.target.id === 'custom-preview-resolution') { $('#preview-resolution').disabled = !event.target.checked; categorySelects.enhance($('#dialog-content')); }
   if (event.target.id === 'category-parent') syncCategoryScope();
 });
 $('#dialog').addEventListener('click', event => { if (event.target === $('#dialog')) closeDialog(); });

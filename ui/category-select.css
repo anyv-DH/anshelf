@@ -1,0 +1,33 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+.category-picker { min-width: 0; width: 100%; }
+.category-picker-trigger { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 39px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); text-align: left; font-size: 11px; transition: border-color .15s, background .15s; }
+.category-picker-trigger > svg { color: var(--accent); }
+.category-picker-trigger:hover, .category-picker-trigger[aria-expanded="true"] { border-color: var(--accent); background: var(--surface-2); }
+.category-picker-trigger [data-category-value] { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.category-picker-chevron { display: flex; margin-left: auto; color: var(--faint); transition: transform .15s; }
+.category-picker-trigger[aria-expanded="true"] .category-picker-chevron { transform: rotate(180deg); }
+.category-picker-popup { position: fixed; inset: auto; margin: 0; padding: 0; overflow: hidden; flex-direction: column; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 45px var(--shadow), 0 0 0 1px var(--accent-soft); font-family: inherit; font-size: 11px; z-index: 50; }
+.category-picker-popup:popover-open { display: flex; }
+.category-picker-search { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--line); color: var(--accent); flex: 0 0 auto; }
+.category-picker-search input { border: 0; padding: 2px 0; border-radius: 0; outline: none; width: 100%; min-width: 0; color: var(--ink); background: transparent; font-size: 11px; }
+.category-picker-search input:focus-visible { outline: none; }
+.category-picker-search:focus-within { box-shadow: inset 0 -1px var(--accent); }
+.category-picker-search input::-webkit-search-cancel-button { cursor: pointer; }
+.category-picker-results { overflow-y: auto; overscroll-behavior: contain; padding: 6px; min-height: 42px; scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+.category-picker-option { position: relative; display: flex; align-items: center; gap: 9px; width: 100%; min-height: 37px; padding: 8px 9px 8px calc(9px + var(--category-depth, 0) * 12px); border: 1px solid transparent; border-radius: 7px; text-align: left; font-size: 11px; }
+.category-picker-option > svg { flex: 0 0 auto; color: var(--faint); }
+.category-picker-option:hover { background: var(--hover); }
+.category-picker-option.is-active { background: var(--accent-soft); border-color: var(--line); }
+.category-picker-option[aria-selected="true"] { color: var(--accent); }
+.category-picker-option-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.category-picker-option-copy strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.category-picker-option-copy small { color: var(--faint); font-size: 9px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.category-picker-check { display: flex; width: 16px; color: var(--accent); visibility: hidden; }
+.category-picker-option[aria-selected="true"] .category-picker-check { visibility: visible; }
+.category-picker-footer { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-top: 1px solid var(--line); color: var(--faint); font-size: 9px; flex: 0 0 auto; }
+.category-picker-empty { margin: 0; padding: 20px 10px; color: var(--faint); text-align: center; line-height: 1.8; }
+.resolution-select .category-picker { width: auto; min-width: 155px; }
+.resolution-select .category-picker-trigger { min-height: 30px; padding: 6px 8px; font-size: 10px; }
+.select-picker-compact .category-picker-option { min-height: 34px; }
+.select-picker-compact .category-picker-results:focus-visible { outline: none; }
+.select-picker-compact .category-picker-footer { gap: 8px; font-size: 8px; }

@@ -13,18 +13,21 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 48, height: 88 }, deviceScaleFactor: 2 });
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {
-      window.panelTest = { pending: null, response: null, heartbeatError: false, completed: [], prepared: [], imports: [], importResult: null };
+      window.panelTest = { pending: null, response: null, heartbeatError: false, completed: [], prepared: [], imports: [], importOptions: [], saveCodes: [], importResult: null,
+        settings: { categories: [{ id:'effect-root',name:'特效素材',parentId:null,scope:'effect' }, { id:'effect-child',name:'旋转特效',parentId:'effect-root',scope:'effect' }, { id:'people',name:'人物',parentId:null,scope:'ordinary' }, { id:'audio',name:'音频',parentId:null,scope:'audio' }, { id:'shared',name:'通用文件夹',parentId:null,scope:'all' }], defaults: { mode:'ordinary',categoryId:null,previewResolution:null,preferExistingPreview:true } } };
       const queue = {
         heartbeat() { if (window.panelTest.heartbeatError) throw new Error('写入失败'); },
         pending() { return window.panelTest.pending; },
         prepare(request) { window.panelTest.prepared.push(request.requestId); return { ...request, managedRoot: 'file:///managed' }; },
         complete(request, result) { window.panelTest.completed.push({ requestId: request.requestId, result }); if (window.panelTest.pending && window.panelTest.pending.requestId === request.requestId) window.panelTest.pending = null; },
-        requestDocumentImport(file) { window.panelTest.imports.push(file); return {requestId:'current-document',createdAt:Date.now()}; },
+        documentImportSettings() { return window.panelTest.settings; },
+        requestDocumentImport(file, options) { window.panelTest.imports.push(file); window.panelTest.importOptions.push(options === undefined ? null : options); return {requestId:'current-document',createdAt:Date.now()}; },
         documentImportResult() { return window.panelTest.importResult; },
         clearDocumentImport() { window.panelTest.importResult = null; }
       };
       window.__adobe_cep__ = { getSystemPath: () => '/extension', evalScript(code, callback) {
-        if (code.includes('AnShelfCurrentDocumentForLibrary')) { window.panelTest.saveResponse = callback; return; }
+        if (code.includes('AnShelfCurrentDocumentInfoForLibrary')) { callback(JSON.stringify({version:1,ok:true,documentId:42,name:'当前作品.fla',file:'C:\\works\\当前作品.fla'})); return; }
+        if (code.includes('AnShelfCurrentDocumentForLibrary')) { window.panelTest.saveCodes.push(code); window.panelTest.saveResponse = callback; return; }
         if (!code.includes('AnShelfInsertWhole')) { callback('42'); return; }
         window.panelTest.response = callback;
       } };
@@ -43,6 +46,13 @@ async function main() {
     assert.equal(await page.locator('main>button').count(), 2);
     assert.equal(await page.locator('#add-confirm').isVisible(), false);
     const addButton = page.locator('#add-current');
+    const choiceValue = selector => page.locator(selector).evaluate(button => button.value);
+    async function choose(name, value) {
+      const trigger = page.locator(name === 'category' ? '#import-category' : '#preview-resolution');
+      const menu = page.locator(name === 'category' ? '#category-options' : '#resolution-options');
+      if (!await menu.isVisible()) await trigger.click();
+      await menu.locator(`[role="option"][data-value="${value}"]`).click();
+    }
     assert.equal(await addButton.isEnabled(), true);
     checks.push('waiting state with compact paste and add-current buttons');
 
@@ -151,33 +161,85 @@ async function main() {
     assert.equal(await addButton.isEnabled(),true);
     assert.equal(await page.evaluate(() => window.panelTest.imports.length),1);
     checks.push('native save cancellation leaves the document out of the import queue');
-    await page.setViewportSize({width:340,height:230});
+    await page.evaluate(() => { window.panelTest.settings.defaults={mode:'effect',categoryId:'effect-child',previewResolution:2048,preferExistingPreview:true}; });
+    await page.setViewportSize({width:380,height:440});
     await addButton.click();
     assert.equal(await page.locator('#add-confirm').isVisible(),true);
-    for (const [width,height] of [[280,200],[340,230]]) {
+    assert.equal(await page.locator('#current-file').textContent(),'当前作品.fla');
+    assert.equal(await page.locator('#import-effect').getAttribute('aria-pressed'),'true');
+    assert.equal(await choiceValue('#preview-resolution'),'2048');
+    assert.equal(await choiceValue('#import-category'),'effect-child');
+    assert.match(await page.locator('#category-options').textContent(),/特效素材 \/ 旋转特效/);
+    assert.doesNotMatch(await page.locator('#category-options').textContent(),/人物|音频/);
+    assert.equal(await page.locator('select, option').count(),0);
+    await page.locator('#preview-resolution').click();
+    assert.equal(await page.locator('#resolution-options').isVisible(),true);
+    await page.screenshot({path:path.join(out,'panel-import-resolution-themed.png'),scale:'css'});
+    await page.keyboard.press('Home'); await page.keyboard.press('ArrowDown');
+    assert.equal(await page.locator('#resolution-options [data-value="256"]').evaluate(button => button===document.activeElement),true);
+    await page.keyboard.press('End'); await page.keyboard.press('ArrowUp'); await page.keyboard.press('Enter');
+    assert.equal(await choiceValue('#preview-resolution'),'1024');
+    assert.equal(await page.locator('#resolution-options').isVisible(),false);
+    assert.equal(await page.locator('#preview-resolution').evaluate(button => button===document.activeElement),true);
+    await page.keyboard.press('ArrowDown'); await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#resolution-options').isVisible(),false);
+    assert.equal(await page.locator('#add-confirm').isVisible(),true);
+    await choose('resolution','2048');
+    await page.locator('#import-category').click();
+    await page.screenshot({path:path.join(out,'panel-import-category-themed.png'),scale:'css'});
+    await page.locator('#confirm-heading').click();
+    assert.equal(await page.locator('#category-options').isVisible(),false);
+    assert.equal(await page.locator('#import-category').evaluate(button => button===document.activeElement),true);
+    assert.equal(await page.evaluate(() => window.panelTest.saveCodes.length),2);
+    await page.locator('#category-search').fill('旋转');
+    assert.doesNotMatch(await page.locator('#category-options').textContent(),/通用文件夹/);
+    await page.locator('#import-ordinary').click();
+    assert.equal(await choiceValue('#import-category'),'');
+    assert.doesNotMatch(await page.locator('#category-options').textContent(),/旋转特效/);
+    await page.locator('#category-search').fill('');
+    assert.match(await page.locator('#category-options').textContent(),/人物/);
+    await page.locator('#import-effect').click();
+    await choose('category','effect-child');
+    await choose('resolution','512');
+    await page.locator('#prefer-existing-preview').uncheck();
+    await page.locator('#confirm-save').focus(); await page.keyboard.press('Tab');
+    assert.equal(await page.locator('#import-ordinary').evaluate(button => button===document.activeElement),true);
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await page.locator('#confirm-save').evaluate(button => button===document.activeElement),true);
+    for (const [width,height] of [[340,400],[380,440],[480,500]]) {
       await page.setViewportSize({width,height});
       const readable = await page.locator('#add-confirm').evaluate(dialog => {
         const box=dialog.getBoundingClientRect();
-        return Array.from(dialog.querySelectorAll('h1,p,button')).every(item => {
+        return dialog.scrollWidth<=dialog.clientWidth&&document.documentElement.scrollWidth===innerWidth&&Array.from(dialog.querySelectorAll('h1,.confirmation-actions button')).every(item => {
           const rect=item.getBoundingClientRect();
           return rect.left>=box.left&&rect.right<=box.right&&rect.top>=box.top&&rect.bottom<=box.bottom&&item.scrollWidth<=item.clientWidth&&item.scrollHeight<=item.clientHeight;
         });
       });
       assert.equal(readable,true,`themed confirmation at ${width}x${height}`);
     }
+    await page.setViewportSize({width:380,height:440});
     await page.screenshot({path:path.join(out,'panel-confirm-themed.png'),scale:'css'});
     await page.locator('#confirm-cancel').click();
     assert.equal(await page.locator('#add-confirm').isVisible(),false);
     assert.equal(await page.evaluate(() => window.panelTest.imports.length),1);
+    assert.equal(await page.evaluate(() => window.panelTest.saveCodes.length),2);
     await addButton.click();
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#add-confirm').isVisible(),false);
+    assert.equal(await page.evaluate(() => window.panelTest.saveCodes.length),2);
     await addButton.click();
+    await choose('category','effect-child');
+    await choose('resolution','512');
+    await page.locator('#prefer-existing-preview').uncheck();
     await page.locator('#confirm-save').click();
+    assert.equal(await page.evaluate(() => window.panelTest.imports.length),1);
     await page.evaluate(() => window.panelTest.saveResponse(JSON.stringify({version:1,ok:true,file:'C:\\works\\另一份作品.fla',name:'另一份作品.fla'})));
     assert.equal(await page.locator('#add-confirm').isVisible(),false);
     assert.equal(await page.evaluate(() => window.panelTest.imports.length),2);
-    checks.push('themed confirmation is readable, supports cancel/Escape and queues a document only after explicit acceptance');
+    assert.deepEqual(await page.evaluate(() => window.panelTest.importOptions),[null,{mode:'effect',categoryId:'effect-child',previewResolution:512,preferExistingPreview:false}]);
+    assert.match(await page.evaluate(() => window.panelTest.saveCodes[2]),/AnShelfCurrentDocumentForLibrary","42"/);
+    checks.push('themed import settings show the current file, inherit effect/2K/category defaults, search nested folders, filter by type, trap focus, cancel without saving and transmit selected options after a document-bound save');
+    checks.push('all plugin choices use themed listboxes without native select menus, support Home/End/arrow/Enter/Escape, close outside and restore trigger focus');
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(out, 'panel-e2e-result.json'), JSON.stringify({ checks, pageErrors: errors }, null, 2));
     console.log(JSON.stringify({ checks, pageErrors: errors }, null, 2));

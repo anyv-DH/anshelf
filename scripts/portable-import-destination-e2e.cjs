@@ -4,6 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
 const assert = require('node:assert/strict');
+const { chooseThemedOption } = require('./ui-select.cjs');
 const { spawn } = require('node:child_process');
 const { chromium } = require(process.env.ANSHELF_PLAYWRIGHT || 'playwright');
 
@@ -45,14 +46,15 @@ async function main() {
       await page.locator(`[data-action="import"][data-mode="${mode}"]`).click();
       await page.waitForSelector('#dialog[open]');
       await page.screenshot({ path: path.join(output, `import-${mode}.png`) });
-      assert.equal(await page.locator('#import-category').isVisible(), true, `${mode}: import must show the destination category selector`);
+      assert.equal(await page.locator('[data-select-trigger="import-category"]').isVisible(), true, `${mode}: import must show the themed destination category selector`);
+      assert.equal(await page.locator('#import-category').isVisible(), false, `${mode}: native compatibility select remains hidden`);
       await page.locator('[data-action="import-create-category"]').click();
       await page.locator('#import-folder-name').fill(`导入测试-${mode}`);
       await page.locator('[data-action="save-import-folder"]').click();
       await page.waitForFunction(() => !!document.querySelector('#import-category')?.value);
       const parentId = await page.locator('#import-category').inputValue();
-      await page.locator('#import-category').selectOption('');
-      await page.locator('#import-category').selectOption(parentId);
+      await chooseThemedOption(page, '#import-category', '');
+      await chooseThemedOption(page, '#import-category', parentId);
       await page.locator('[data-action="import-create-child-category"]').click();
       await page.locator('#import-folder-name').fill('子分类');
       await page.locator('[data-action="save-import-folder"]').click();

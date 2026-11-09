@@ -6,6 +6,31 @@ const crypto = require('crypto');
 const MAX_FLA_BYTES = 512 * 1024 * 1024;
 const DRAG_TTL_MS = 5 * 60 * 1000;
 const STAGE_DROP_TTL_MS = 5000;
+const IMPORT_RESOLUTIONS = [256, 512, 1024, 2048];
+
+function documentImportOptions(options) {
+  if (options === undefined) return undefined;
+  if (!options || typeof options !== 'object' || Array.isArray(options)
+    || Object.keys(options).some(key => !['mode', 'categoryId', 'previewResolution', 'preferExistingPreview'].includes(key))) throw new Error('当前文档导入选项无效');
+  const result = {};
+  if (Object.prototype.hasOwnProperty.call(options, 'mode')) {
+    if (!['ordinary', 'effect'].includes(options.mode)) throw new Error('导入类型只能是普通素材或特效');
+    result.mode = options.mode;
+  }
+  if (Object.prototype.hasOwnProperty.call(options, 'categoryId')) {
+    if (options.categoryId !== null && (typeof options.categoryId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(options.categoryId))) throw new Error('导入分类无效');
+    result.categoryId = options.categoryId;
+  }
+  if (Object.prototype.hasOwnProperty.call(options, 'previewResolution')) {
+    if (options.previewResolution !== null && !IMPORT_RESOLUTIONS.includes(options.previewResolution)) throw new Error('预览分辨率无效');
+    result.previewResolution = options.previewResolution;
+  }
+  if (Object.prototype.hasOwnProperty.call(options, 'preferExistingPreview')) {
+    if (typeof options.preferExistingPreview !== 'boolean') throw new Error('复用预览图选项无效');
+    result.preferExistingPreview = options.preferExistingPreview;
+  }
+  return result;
+}
 
 function validDocumentId(value) {
   return Number.isSafeInteger(value) && value >= 0;
@@ -114,11 +139,47 @@ class Queue {
     fs.mkdirSync(directory, { recursive: true });
     return path.join(directory, requestId + '.json');
   }
-  requestDocumentImport(file) {
+  documentImportSettings(file) {
+    const defaults = { mode: 'ordinary', categoryId: null, previewResolution: null, preferExistingPreview: true };
+    const index = path.join(this.root, 'library.json');
+    noLinks(index);
+    if (!fs.existsSync(index)) return { categories: [], defaults };
+    try {
+      const stat = fs.statSync(index);
+      if (!stat.isFile() || stat.size > 32 * 1024 * 1024) throw new Error('素材库分类索引过大或不可读');
+      const data = JSON.parse(fs.readFileSync(index, 'utf8'));
+      if (!data || !Array.isArray(data.categories) || !Array.isArray(data.assets) || data.categories.length > 10000) throw new Error('素材库分类索引无效');
+      const categories = data.categories.map(category => {
+        if (!category || typeof category.id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(category.id)
+          || typeof category.name !== 'string' || !category.name.trim() || category.name.length > 180
+          || (category.parentId !== null && category.parentId !== undefined && typeof category.parentId !== 'string')
+          || (category.scope !== undefined && !['all', 'ordinary', 'effect', 'audio'].includes(category.scope))) throw new Error('素材库分类记录无效');
+        return { id: category.id, name: category.name, parentId: category.parentId || null, scope: category.scope || 'all' };
+      });
+      const key = value => {
+        if (typeof value !== 'string' || !path.isAbsolute(value)) return null;
+        const resolved = path.resolve(value);
+        return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+      };
+      const requested = key(file);
+      const asset = requested && data.assets.find(item => item && item.kind !== 'audio'
+        && (typeof item.managedPath === 'string' && key(path.resolve(this.root, item.managedPath)) === requested
+          || Array.isArray(item.sourcePaths) && item.sourcePaths.some(source => key(source) === requested)));
+      if (asset) {
+        defaults.mode = asset.assetType === 'effect' ? 'effect' : 'ordinary';
+        defaults.categoryId = categories.some(category => category.id === asset.categoryId) ? asset.categoryId : null;
+        defaults.previewResolution = IMPORT_RESOLUTIONS.includes(asset.previewResolution) ? asset.previewResolution : null;
+      }
+      return { categories, defaults };
+    } catch (error) { throw new Error('无法读取素材库分类，请先在管理器检查素材库：' + String(error.message || error)); }
+  }
+  requestDocumentImport(file, options) {
+    const selectedOptions = documentImportOptions(options);
     if (typeof file !== 'string' || file.includes('\0') || !path.isAbsolute(file) || path.extname(file).toLowerCase() !== '.fla') throw new Error('请先保存为本地 FLA 文件');
     noLinks(file);
     if (!fs.statSync(file).isFile()) throw new Error('当前 FLA 文件不存在');
     const request = { version: 1, requestId: crypto.randomBytes(16).toString('hex'), file, createdAt: Date.now() };
+    if (selectedOptions !== undefined) request.options = selectedOptions;
     this.documentImportFile('inbox', request.requestId);
     this.atomic(path.join('document-import/inbox', request.requestId + '.json'), request);
     return request;

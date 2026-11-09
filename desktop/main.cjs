@@ -76,7 +76,7 @@ app.whenReady().then(async()=>{
     openInAnimate:openAnimateFile,
     revealFile:async file=>{shell.showItemInFolder(file);},
     pickDuplicateFolder:async()=>{const r=await dialog.showOpenDialog(win,{title:'原文件夹不可用，请选择新文件的保存位置',properties:['openDirectory','createDirectory']});return r.canceled?[]:r.filePaths;},
-    confirmDuplicate:({name,directory})=>confirmations.request({title:'复制一份新文件',message:`请您确认：复制“${name}”？`,detail:`将在以下文件夹保存最新已保存内容的副本：\n${directory}\n\n原文件不会被覆盖，新文件不会自动加入素材库。`,confirmLabel:'确认复制',cancelLabel:'暂不复制'}),
+    confirmDuplicate:({name})=>confirmations.request({title:'复制并加入素材库',message:`请您确认：为“${name}”创建一份可独立编辑的新素材？`,detail:'确认后会在素材库中新增一份独立文件并自动入库，继承原素材的分类、类型、标签和预览设置。\n\n新素材不继承收藏或点赞；以后修改新素材，不会影响原素材。不在外部原文件夹额外复制文件。',confirmLabel:'确认复制并入库',cancelLabel:'暂不复制'}),
     setTheme:async(theme)=>{win.setBackgroundColor(theme==='warm'?'#f7f1e9':'#171520');return theme;},
     windowAction:async(action)=>windowMode.action(action),
     openPluginFolder:async()=>{const error=await shell.openPath(app.isPackaged?path.join(process.resourcesPath,'AnimatePlugin'):path.join(app.getAppPath(),'plugin'));if(error)throw new Error('无法打开 AN 面板文件夹：'+error);return true;}});
@@ -90,7 +90,7 @@ app.whenReady().then(async()=>{
   } catch (error) { win.webContents.once?.('did-finish-load',()=>win.webContents.send('shelf:drag-error','舞台拖动暂不可用：'+String(error.message||error))); }
   await win.loadFile(path.join(__dirname,'../dist/index.html'));
   if(win.isFocused)reportWindowActivity();
-  documentImports=await createDocumentImportReceiver({root,importDocument:file=>host.importCurrentDocument(file),onResult:result=>{
+  documentImports=await createDocumentImportReceiver({root,importDocument:(file,options)=>host.importCurrentDocument(file,options),onResult:result=>{
     if(!win.isDestroyed())win.webContents.send('shelf:import-notice',result.ok?`AN 当前文档已${result.updated?'更新':'加入'}素材库：${result.name}`:`AN 文档加入失败：${result.error||'请重试'}`);
   }});
 }).catch(error=>{dialog.showErrorBox('安安素材管理器启动失败',error.message);app.quit();});

@@ -1,4 +1,22 @@
 <!-- Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. -->
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"><title>安安素材管理器</title><link rel="stylesheet" href="style.css"></head>
-<body><main><button id="insert" type="button" data-state="waiting" title="等待安安素材管理器发送素材 · 安屿动画" aria-label="等待素材。等待安安素材管理器发送素材 · 安屿动画" aria-live="polite" disabled>等待素材</button><button id="add-current" type="button" data-state="ready" title="保存当前 AN 文档并一键加入素材库 · 安屿动画" aria-label="加入素材库。保存当前 AN 文档并一键加入素材库 · 安屿动画" aria-live="polite">加入素材库</button></main><section id="add-confirm" class="confirmation" role="dialog" aria-modal="true" aria-labelledby="confirm-heading" aria-describedby="confirm-description" hidden><div class="confirmation-brand">✦ 安安素材管理器</div><h1 id="confirm-heading">把这份灵感，收进素材库</h1><p id="confirm-description">将保存当前 AN 文档并加入素材库。<br>库内文档会更新原素材。<br>取消不会保存，也不会加入。</p><div class="confirmation-actions"><button id="confirm-cancel" type="button">取消</button><button id="confirm-save" type="button">保存并加入</button></div></section><script src="panel.js"></script></body></html>
+<body>
+<main><button id="insert" type="button" data-state="waiting" title="等待安安素材管理器发送素材 · 安屿动画" aria-label="等待素材。等待安安素材管理器发送素材 · 安屿动画" aria-live="polite" disabled>等待素材</button><button id="add-current" type="button" data-state="ready" title="保存当前 AN 文档并一键加入素材库 · 安屿动画" aria-label="加入素材库。保存当前 AN 文档并一键加入素材库 · 安屿动画" aria-live="polite">加入素材库</button></main>
+<section id="add-confirm" class="confirmation" role="dialog" aria-modal="true" aria-labelledby="confirm-heading" aria-describedby="confirm-description" hidden>
+  <div class="confirmation-brand">✦ 安安素材管理器</div>
+  <h1 id="confirm-heading">把这份灵感，收进素材库</h1>
+  <div id="current-file" class="current-file" aria-label="当前文档"></div>
+  <div class="import-settings">
+    <div class="setting-row"><span class="setting-label" id="import-type-label">素材类型</span><div class="type-options" role="group" aria-labelledby="import-type-label"><button id="import-ordinary" type="button" data-mode="ordinary" aria-pressed="true">普通素材</button><button id="import-effect" type="button" data-mode="effect" aria-pressed="false">特效素材</button></div></div>
+    <div class="category-settings"><div class="category-label" id="category-label">分类文件夹<span>已有素材会保留其他分类</span></div><input id="category-search" type="search" placeholder="搜索分类或子文件夹…" aria-label="搜索分类文件夹" autocomplete="off"><button id="import-category" class="setting-choice" type="button" aria-label="分类文件夹" aria-haspopup="listbox" aria-expanded="false" aria-controls="category-options">不指定分类</button></div>
+    <div class="setting-row"><span class="setting-label" id="resolution-label">预览分辨率</span><button id="preview-resolution" class="setting-choice" type="button" aria-labelledby="resolution-label preview-resolution" aria-haspopup="listbox" aria-expanded="false" aria-controls="resolution-options">默认</button></div>
+    <label class="reuse-preview"><input id="prefer-existing-preview" type="checkbox" checked><span>优先使用已有的同名预览图</span></label>
+    <p id="settings-error" class="settings-error" role="alert" hidden></p>
+  </div>
+  <p id="confirm-description">确认后保存当前文档并加入；库内文档更新原素材。<br>取消不会保存，也不会加入。</p>
+  <div class="confirmation-actions"><button id="confirm-cancel" type="button">取消</button><button id="confirm-save" type="button">保存并加入</button></div>
+  <div id="category-options" class="theme-options" role="listbox" aria-labelledby="category-label" hidden></div>
+  <div id="resolution-options" class="theme-options" role="listbox" aria-labelledby="resolution-label" hidden><button type="button" role="option" data-value="" aria-selected="true">默认</button><button type="button" role="option" data-value="256" aria-selected="false">256 像素</button><button type="button" role="option" data-value="512" aria-selected="false">512 像素</button><button type="button" role="option" data-value="1024" aria-selected="false">1024 像素</button><button type="button" role="option" data-value="2048" aria-selected="false">2K · 2048 像素</button></div>
+</section>
+<script src="panel.js"></script></body></html>

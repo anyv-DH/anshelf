@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
 const { atomicJson } = require('../core/files.cjs');
+const { documentImportOptions } = require('../core/document-import-options.cjs');
 const MAX_DESCRIPTOR_BYTES = 16384;
 const REQUEST_TTL = 120000;
 const ID = /^[a-zA-Z0-9-]{1,80}$/;
@@ -50,7 +51,7 @@ async function createDocumentImportReceiver({ root, importDocument, onResult = (
       finally { await handle.close(); }
       if (count > MAX_DESCRIPTOR_BYTES) throw new Error('当前文档导入请求过大');
       const request = JSON.parse(bytes.subarray(0, count).toString('utf8'));
-      if (!request || Array.isArray(request) || Object.keys(request).sort().join(',') !== 'createdAt,file,requestId,version'
+      if (!request || Array.isArray(request) || !['createdAt,file,requestId,version','createdAt,file,options,requestId,version'].includes(Object.keys(request).sort().join(','))
         || request.version !== 1 || request.requestId !== requestId
         || !Number.isSafeInteger(request.createdAt) || request.createdAt > Date.now() + 5000 || Date.now() - request.createdAt > REQUEST_TTL) throw new Error('当前文档导入请求无效或已过期，请重新点击加入素材库');
       if (typeof request.file !== 'string' || request.file.includes('\0') || !path.isAbsolute(request.file)
@@ -58,7 +59,8 @@ async function createDocumentImportReceiver({ root, importDocument, onResult = (
       await noLinks(request.file);
       const source = await fsp.stat(request.file);
       if (!source.isFile() || source.size > 512 * 1024 * 1024) throw new Error('当前 FLA 不存在或超过 512 MB 导入上限');
-      const imported = await importDocument(request.file);
+      const options = documentImportOptions(request.options);
+      const imported = await importDocument(request.file, options);
       if (!imported || typeof imported.assetId !== 'string') throw new Error('当前文档未能加入素材库');
       result = { version: 1, requestId, completedAt: Date.now(), ok: true, assetId: imported.assetId, name: String(imported.name || ''), updated: Boolean(imported.updated), duplicate: Boolean(imported.duplicate), reused: Boolean(imported.reused || imported.duplicate || imported.updated) };
     } catch (error) {

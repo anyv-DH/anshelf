@@ -1,5 +1,34 @@
 # Test plan
 
+## 0.3.10 acceptance — pending final verification
+
+Use isolated temporary libraries and public/synthetic AN documents. Do not mutate the private live library or copy its assets into test evidence. The requirements below are checks to run; they are not claims of final success.
+
+### Independent managed copies
+
+- Reproduce the reported 1-card-after-copy failure before repair; after confirmation expect 2 independent IDs, exactly 2 managed payloads total, inherited categories/type/tags/preview settings and no external copy. Favorite and like state reset.
+- Cancel after an AN edit: index bytes, paths, payloads, render count and Explorer calls remain unchanged.
+- Edit/open/AN re-add/reopen the copy and confirm original bytes/hash/preview/categories are unchanged. Remove and restore either record without hash-based merging.
+- Ordinary external reimports still deduplicate; known managed paths retain their independent identity. Unknown same-byte external files must not randomly reuse a copy.
+- Exercise concurrent readable names, audio/effect/2K inheritance, preview cache isolation, index-write rollback and Explorer failure after successful registration.
+- Electron journey: card/preview/inspector entry points, themed confirmation/cancel, automatic selection in current or fallback category, pagination/sort visibility, file bridge and reopen with zero page errors.
+
+### Themed selection menus and searchable categories
+
+- Verify all five manager selects (import category/resolution, category parent/type and inspector category) in dark/warm themes. Three category menus cover long/same-leaf paths, many categories, empty results and special characters; resolution/type use compact non-search lists preserving option order.
+- Search by leaf and parent path; select by mouse and keyboard; Escape/outside click closes cleanly and restores focus. Compatible type scopes remain enforced.
+- Synchronize optional-resolution and inherited-type disabled state/value. Reopening dialogs and refreshing the inspector must not duplicate listeners, lose an active popup or discard the trigger focus after commit. Tab/Shift+Tab, Escape, outside click, scroll, resize and dialog close must leave no orphan menu. No picker idle polling, observers or persistent DOM growth.
+
+### AN current-document import settings
+
+- Before save, expose ordinary/effect, searchable compatible categories, default/256/512/1024/2048 preview and same-stem reuse. CEP category and resolution menus must both use panel-themed buttons/options, support keyboard and avoid native select lists. Test new external FLA, registered managed FLA, independent copies and duplicate external bytes.
+- Cancel, Escape, native save cancellation and document switching must not submit an import or save a different document. Existing memberships survive; no-option legacy requests preserve defaults and prior settings.
+- Reject extra option fields, wrong types, unsupported resolutions, missing/cross-scope categories, stale descriptors and malformed requests with bounded Chinese errors; do not leave a half-configured record.
+- Verify narrow floating resize/restore and docked resize refusal/no-op fallback. The fallback uses legacy native confirmation without new options. VM/browser acceptance is separate from actual CEP-in-AN behavior.
+- Re-sign after the final plugin edit; verify the manifest and runtime as 0.3.10, in-app installer status, signed-byte equality and installed Adobe verification. Reopen the panel to load the new code.
+
+Final full-suite counts, build, packaged journeys, source-byte/signature audits, exact portable smoke, desktop shortcut and GitHub publication remain **pending**. Record results only after the final source change. Real updated AN 2023/2024 full-flow and taskbar handoff acceptance remain independent host gates.
+
 ## 0.3.9 reliability, scoped removal and explicit update acceptance
 
 Use isolated temporary libraries throughout. `tests/managed-file-alias.test.cjs` first reproduced two ENOENT failures on Windows: slash/backslash metadata and case aliases removed the single FLA after reconciliation. Require no payload rename/removal for aliases, continued readability after reopen, latest saved hash/preview refresh, real two-file same-content convergence and differing-content refusal. `tests/managed-category-repro.test.cjs` covers legacy whole-record undo, shared-category opens, remove/reimport/undo identity merging and preserved saved bytes/previews/history. `tests/managed-file-recovery.test.cjs` and `tests/managed-recovery-host.test.cjs` cover bounded same-ID recovery, changed saved content, conflicting candidates, links and original preservation. No private-library repair is an automated test fixture.

@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const assert = require('node:assert/strict');
+const { chooseThemedOption } = require('./ui-select.cjs');
 const { _electron } = require(process.env.ANSHELF_PLAYWRIGHT || 'playwright');
 const root = path.resolve(__dirname, '..');
 
@@ -101,10 +102,10 @@ async function main() {
     assert.equal(await page.locator('#preview-resolution').isDisabled(), true);
     await page.locator('#custom-preview-resolution').check();
     assert.equal(await page.locator('#preview-resolution').isDisabled(), false);
-    await page.locator('#preview-resolution').selectOption('2048');
+    await chooseThemedOption(page, '#preview-resolution', '2048');
     await page.locator('#prefer-preview').uncheck();
     await page.screenshot({ path: path.join(root, 'test-output/import-resolution-2k.png'), scale: 'css', animations: 'disabled' });
-    await page.locator('#import-category').selectOption(importChild.id);
+    await chooseThemedOption(page, '#import-category', importChild.id);
     const file = path.join(root, 'demo', (await fs.readdir(path.join(root, 'demo'))).find(name => name.endsWith('.fla')));
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, file);
     await page.locator('[data-action="import-files"]').click();
@@ -119,7 +120,7 @@ async function main() {
     await page.locator('[data-action="import"][data-mode="effect"]').click();
     assert.equal(await page.locator('#preview-resolution').isDisabled(), true);
     await page.locator('#custom-preview-resolution').check();
-    await page.locator('#preview-resolution').selectOption('256');
+    await chooseThemedOption(page, '#preview-resolution', '256');
     await page.locator('#prefer-preview').uncheck();
     assert.equal(await page.locator('.resolution-note').isVisible(), true);
     await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, effectFile);

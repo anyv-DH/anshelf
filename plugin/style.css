@@ -22,11 +22,40 @@ button[data-state="success"]::after{background:#9cdcb9}
 button[data-state="error"]{background:#503739;border-color:#865558;color:#ffccd0}
 button[data-state="error"]::after{background:#f1a4a9}
 .confirmation[hidden]{display:none}
-.confirmation{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;justify-content:center;padding:20px;background:radial-gradient(ellipse at 100% 0,#43304f 0,transparent 65%),#211e29;color:#f6f0ff}
-.confirmation-brand{font-size:11px;line-height:18px;letter-spacing:1px;color:#cdb3f0}
-.confirmation h1{font-size:18px;line-height:26px;margin:8px 0;color:#fff;font-weight:650}
-.confirmation p{font-size:12px;line-height:20px;margin:0 0 16px;color:#c8bfd4}
+.confirmation{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;padding:16px;background:radial-gradient(ellipse at 100% 0,#43304f 0,transparent 65%),#211e29;color:#f6f0ff;overflow:hidden}
+.confirmation-brand{flex:none;font-size:10px;line-height:16px;letter-spacing:1px;color:#cdb3f0}
+.confirmation h1{flex:none;font-size:17px;line-height:24px;margin:2px 0 6px;color:#fff;font-weight:650}
+.confirmation p{font-size:11px;line-height:17px;margin:8px 0 10px;color:#c8bfd4}
+.current-file{flex:none;min-height:28px;padding:5px 8px;border:1px solid #4b3d5a;border-radius:7px;background:#302737;font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#e1d2ed}
+.import-settings{min-height:0;overflow:auto;display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:0 2px 1px 0;scrollbar-width:thin;scrollbar-color:#766080 transparent}
+.setting-row{display:flex;align-items:center;gap:10px;min-height:30px;flex:none;margin:0}
+.setting-label{flex:0 0 72px;font-size:12px;color:#dfd3e9}
+.type-options{display:flex;flex:1;gap:4px}
+.type-options button{flex:1;min-width:0;height:30px;border:1px solid #635070;border-radius:7px;background:#302737;color:#cfc2db;font-size:12px}
+.type-options button[aria-pressed="true"]{background:#70518f;border-color:#bd91e1;color:#fff}
+.category-settings{flex:none;display:flex;flex-direction:column;gap:5px}
+.category-label{display:flex;justify-content:space-between;gap:6px;font-size:12px;line-height:17px;color:#dfd3e9}
+.category-label span{font-size:10px;color:#ae9ebd}
+.import-settings input[type="search"],.setting-choice{min-width:0;width:100%;height:29px;border:1px solid #635070;border-radius:6px;background:#302737;color:#eee5f7;font:12px "Segoe UI","Microsoft YaHei",sans-serif;padding:3px 7px}
+.import-settings input::placeholder{color:#a89ab8}
+.setting-row .setting-choice{flex:1}
+.setting-choice{position:relative;display:block;padding-right:27px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.setting-choice::after{content:"";position:absolute;right:11px;top:9px;width:7px;height:7px;border-right:1.5px solid #c9b6dc;border-bottom:1.5px solid #c9b6dc;transform:rotate(45deg)}
+.setting-choice:hover,.setting-choice[aria-expanded="true"]{border-color:#b68cda;background:#392d43}
+.theme-options[hidden]{display:none}
+.theme-options{position:fixed;z-index:30;min-width:100px;max-height:180px;overflow:auto;padding:4px;border:1px solid #795e90;border-radius:9px;background:#2d2536;box-shadow:0 8px 28px #100b20aa;scrollbar-width:thin;scrollbar-color:#806491 #2d2536}
+.theme-options [role="option"]{display:block;position:relative;min-width:0;width:100%;min-height:29px;padding:6px 27px 6px 8px;border:0;border-radius:5px;background:transparent;color:#dbcee6;text-align:left;font:12px/17px "Segoe UI","Microsoft YaHei",sans-serif;overflow-wrap:anywhere}
+.theme-options [role="option"]:hover,.theme-options [role="option"]:focus{outline:none;background:#51405f;color:#fff}
+.theme-options [role="option"][aria-selected="true"]{background:#61477b;color:#fff}
+.theme-options [role="option"][aria-selected="true"]::after{content:"✓";position:absolute;right:8px;top:6px;color:#e6c9ff;font-size:12px}
+.theme-options .no-options{margin:4px;padding:4px;color:#b7a6c7;font-size:11px;line-height:17px}
+.reuse-preview{flex:none;display:flex;align-items:center;gap:6px;font-size:11px;line-height:20px;color:#d0c3de}
+.reuse-preview input{margin:0;accent-color:#b88bdd}
+.import-settings .settings-error{color:#ffc5cf;margin:0;font-size:11px;line-height:17px}
+.settings-error[hidden]{display:none}
+.confirmation input:focus-visible,.setting-choice:focus-visible{outline:2px solid #d5c3ff;outline-offset:1px}
 .confirmation-actions{display:flex;justify-content:flex-end;gap:8px}
+.confirmation-actions{flex:none}
 .confirmation-actions button{height:32px;padding:0 15px;border:1px solid #665573;border-radius:8px;background:#302936;color:#e7deee;font-size:12px;font-weight:600}
 .confirmation-actions #confirm-save{background:linear-gradient(115deg,#a575d9,#7b5ab5);border-color:#c292ec;color:#fff}
 .confirmation-actions button:hover{filter:brightness(1.12)}

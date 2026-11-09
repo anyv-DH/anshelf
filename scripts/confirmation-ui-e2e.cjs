@@ -13,6 +13,7 @@ async function main() {
   await fs.mkdir(output, { recursive: true });
   const demo = (await fs.readdir(path.join(root, 'demo'))).find(name => name.endsWith('.fla'));
   const source = path.join(temporary, '跨剧人物.fla'); await fs.copyFile(path.join(root, 'demo', demo), source);
+  await fs.writeFile(path.join(temporary, '跨剧人物.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0soAAAAASUVORK5CYII=', 'base64'));
   const original = await fs.readFile(source), library = await Library.open(data);
   const asset = (await library.importPaths([source])).assets[0];
   const a = await library.createCategory('人物原分类'), b = await library.createCategory('新剧分类');
@@ -32,6 +33,16 @@ async function main() {
     const waitClosed = () => page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
     const noMutation = async () => { const current = await snapshot(); assert.equal(current.assets.length, 1); assert.deepEqual([...new Set([current.assets[0].categoryId, ...current.assets[0].categoryIds])].sort(), [a.id, b.id].sort()); };
     await page.locator(`[data-action="category"][data-id="${b.id}"]`).first().click(); await select();
+    await openRemove();
+    await page.locator('[data-confirm="cancel"]').click(); await waitClosed();
+    await page.evaluate(async id => {
+      globalThis.beforeConfirmationRefresh = document.querySelector('[data-action="remove"]');
+      await window.shelf.updateAsset(id, { tags: ['确认取消后刷新'] });
+    }, asset.id);
+    await page.waitForFunction(() => globalThis.beforeConfirmationRefresh && !globalThis.beforeConfirmationRefresh.isConnected);
+    assert.equal(await page.locator('[data-action="remove"]').evaluate(button => document.activeElement === button), true, 'metadata refresh after cancellation preserves the remove action focus');
+    await noMutation();
+    checks.push('cancelling removal then committing fixture metadata deterministically replaces the action bar without losing remove-button focus or category memberships');
     for (const mode of ['Enter', 'Escape', 'backdrop', 'close', 'cancel']) {
       await openRemove();
       assert.equal(await page.locator('[data-confirm="cancel"]').evaluate(button => document.activeElement === button), true);
@@ -75,7 +86,10 @@ async function main() {
     await page.locator('[data-action="category"][data-id="all"]').first().click();
     await page.locator('.asset-card [data-action="duplicate-file"]').click();
     await page.locator('#confirm-dialog[open]').waitFor();
-    assert.match(await page.locator('#confirm-detail').textContent(), new RegExp(temporary.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(await page.locator('#confirm-dialog').textContent(), /复制并加入素材库/);
+    assert.match(await page.locator('#confirm-message').textContent(), /独立编辑/);
+    assert.match(await page.locator('#confirm-detail').textContent(), /自动入库/);
+    assert.match(await page.locator('#confirm-detail').textContent(), /不会影响原素材/);
     await page.screenshot({ path: path.join(output, 'copy-warm.png'), scale: 'css' });
     await page.keyboard.press('Escape'); await waitClosed(); await page.waitForFunction(() => !document.body.classList.contains('is-busy'));
     assert.deepEqual(await app.evaluate(() => globalThis.revealedConfirmCopies), []);
@@ -87,10 +101,17 @@ async function main() {
     await page.locator('#dialog [data-action="duplicate-file"]').click();
     await page.locator('#confirm-dialog[open] [data-confirm="accept"]').click(); await waitClosed();
     await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('已复制'));
-    assert.deepEqual(await fs.readFile(path.join(temporary, '跨剧人物 - 副本.fla')), original);
-    assert.deepEqual(await app.evaluate(() => globalThis.revealedConfirmCopies), [path.join(temporary, '跨剧人物 - 副本.fla')]);
-    assert.equal((await snapshot()).assets.length, 1); assert.deepEqual(await fs.readFile(source), original);
-    checks.push('copy broker uses the same themed dialog; cancellation writes nothing, preview remains open and explicit acceptance copies one file');
+    const copied = await snapshot();
+    assert.equal(copied.assets.length, 2);
+    const independent = copied.assets.find(item => item.id !== asset.id);
+    const copyFile = path.join(data, independent.managedPath);
+    assert.deepEqual(await fs.readFile(copyFile), original);
+    assert.deepEqual(await app.evaluate(() => globalThis.revealedConfirmCopies), [copyFile]);
+    await page.waitForSelector(`[data-asset="${independent.id}"].selected`);
+    assert.equal(await page.locator('#dialog').evaluate(dialog => dialog.open), false);
+    assert.deepEqual(await fs.readFile(source), original);
+    await assert.rejects(fs.access(path.join(temporary, '跨剧人物 - 副本.fla')), { code: 'ENOENT' });
+    checks.push('copy broker explains independent editing and automatic registration; cancellation preserves the lightbox and writes nothing, acceptance closes it and selects the new managed material');
     assert.deepEqual(errors, []); assert.deepEqual(nativeDialogs, []);
     await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ checks, pageErrors: errors, nativeDialogs }, null, 2));
     console.log(JSON.stringify({ checks, pageErrors: errors, nativeDialogs }, null, 2));

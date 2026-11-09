@@ -18,46 +18,72 @@ async function fixture(t, options = {}, name = '女主角.fla', mode = 'ordinary
   return { base, source, host, revealed, asset: host.library.snapshot().assets[0] };
 }
 
-test('explicit duplication copies the latest managed bytes beside the original and reveals the Chinese filename', async t => {
+test('explicit duplication adds an independent asset with the latest managed bytes and reveals its readable filename', async t => {
   const { host, source, base, revealed, asset } = await fixture(t);
-  await fs.writeFile(host.library.assetPath(asset.id), 'saved-in-Animate');
+  const originalManaged = host.library.assetPath(asset.id);
+  const externalFiles = (await fs.readdir(base)).sort();
+  await fs.writeFile(originalManaged, 'saved-in-Animate');
   const result = await host.api.duplicateInFolder(asset.id);
   await host.queue.idle();
+  const copy = host.library.getAsset(result.assetId);
   assert.equal(result.cancelled, false);
-  assert.equal(result.file, path.join(base, '女主角 - 副本.fla'));
+  assert.notEqual(result.assetId, asset.id);
+  assert.equal(copy.independentCopy, true);
+  assert.equal(result.file, path.join(host.root, 'assets', copy.id, '女主角 - 副本.fla'));
+  assert.equal(host.library.assetPath(copy.id), result.file);
+  assert.notEqual(copy.managedPath, host.library.getAsset(asset.id).managedPath);
+  assert.equal(copy.hash, host.library.getAsset(asset.id).hash);
   assert.equal(await fs.readFile(result.file, 'utf8'), 'saved-in-Animate');
+  assert.equal(await fs.readFile(originalManaged, 'utf8'), 'saved-in-Animate');
   assert.equal(await fs.readFile(source, 'utf8'), 'original');
   assert.deepEqual(revealed, [result.file]);
-  assert.equal(host.library.snapshot().assets.length, 1);
+  assert.equal(host.library.snapshot().assets.length, 2);
+  assert.deepEqual((await fs.readdir(base)).sort(), externalFiles);
 });
 
-test('simultaneous copies use unique suffixes without overwriting existing files', async t => {
-  const { host, base, asset } = await fixture(t);
-  const first = path.join(base, '女主角 - 副本.fla');
-  await fs.writeFile(first, 'keep-existing');
+test('simultaneous copies receive unique asset identities and suffixes without overwriting an existing copy', async t => {
+  const { host, asset } = await fixture(t);
+  const first = await host.api.duplicateInFolder(asset.id);
+  await fs.writeFile(first.file, 'keep-existing-copy');
   const results = await Promise.all([host.api.duplicateInFolder(asset.id), host.api.duplicateInFolder(asset.id)]);
+  await host.queue.idle();
   assert.deepEqual(results.map(result => path.basename(result.file)).sort(), ['女主角 - 副本 (2).fla', '女主角 - 副本 (3).fla']);
-  assert.equal(await fs.readFile(first, 'utf8'), 'keep-existing');
-  assert.ok((await fs.readdir(base)).every(name => !name.endsWith('.tmp')));
+  assert.equal(new Set([first.assetId, ...results.map(result => result.assetId)]).size, 3);
+  assert.equal(new Set([path.dirname(first.file), ...results.map(result => path.dirname(result.file))]).size, 3);
+  for (const result of results) {
+    assert.equal(path.dirname(result.file), path.join(host.root, 'assets', result.assetId));
+    assert.equal(await fs.readFile(result.file, 'utf8'), 'original');
+  }
+  assert.equal(await fs.readFile(first.file, 'utf8'), 'keep-existing-copy');
+  assert.equal(host.library.snapshot().assets.length, 4);
 });
 
-test('a missing original offers a destination folder and cancelling leaves no copy', async t => {
+test('a missing external source still duplicates the managed asset without asking for a destination', async t => {
   let picks = 0;
   const { host, base, source, revealed, asset } = await fixture(t, { pickDuplicateFolder: async () => { picks++; return []; } });
   await fs.unlink(source);
-  assert.deepEqual(await host.api.duplicateInFolder(asset.id), { cancelled: true });
-  assert.equal(picks, 1);
-  assert.deepEqual(revealed, []);
+  const result = await host.api.duplicateInFolder(asset.id);
+  await host.queue.idle();
+  assert.equal(result.cancelled, false);
+  assert.equal(picks, 0);
+  assert.equal(result.file, path.join(host.root, 'assets', result.assetId, '女主角 - 副本.fla'));
+  assert.equal(await fs.readFile(result.file, 'utf8'), 'original');
+  assert.equal(host.library.snapshot().assets.length, 2);
+  assert.deepEqual(revealed, [result.file]);
   assert.deepEqual(await fs.readdir(base), ['library']);
 });
 
-test('declining the second confirmation creates no file and never reveals Explorer', async t => {
+test('declining duplication leaves all files and records unchanged and never reveals Explorer', async t => {
   const confirmations = [];
   const { host, base, revealed, asset } = await fixture(t, { confirmDuplicate: async details => { confirmations.push(details); return false; } });
   const filesBefore = (await fs.readdir(base, { recursive: true })).sort();
+  const indexBefore = await fs.readFile(path.join(host.root, 'library.json'), 'utf8');
+  const assetsBefore = host.library.snapshot().assets;
   assert.deepEqual(await host.api.duplicateInFolder(asset.id), { cancelled: true });
-  assert.deepEqual(confirmations, [{ name: '女主角', directory: base, extension: '.fla' }]);
+  assert.deepEqual(confirmations, [{ name: '女主角', directory: path.join(host.root, 'assets'), extension: '.fla' }]);
   assert.deepEqual((await fs.readdir(base, { recursive: true })).sort(), filesBefore);
+  assert.equal(await fs.readFile(path.join(host.root, 'library.json'), 'utf8'), indexBefore);
+  assert.deepEqual(host.library.snapshot().assets, assetsBefore);
   assert.deepEqual(revealed, []);
 });
 
@@ -84,43 +110,75 @@ test('declining copy after an AN save leaves the index, preview queue and manage
   assert.deepEqual(revealed, []);
 });
 
-test('a chosen fallback directory gets the copy and audio keeps its extension', async t => {
-  let destination;
-  const { host, base, source, asset } = await fixture(t, { pickDuplicateFolder: async () => [destination] }, '鼓点.wav', 'audio');
-  destination = path.join(base, '导出');
-  await fs.mkdir(destination);
+test('audio duplication adds a managed independent asset with its extension and no preview render or destination picker', async t => {
+  let renders = 0;
+  let picks = 0;
+  const { host, base, source, asset, revealed } = await fixture(t, {
+    pickDuplicateFolder: async () => { picks++; throw new Error('must not pick a destination'); },
+    render: async () => { renders++; throw new Error('must not render audio'); },
+  }, '鼓点.wav', 'audio');
   await fs.unlink(source);
+  const beforeFiles = (await fs.readdir(host.root, { recursive: true })).filter(name => name.endsWith('.wav'));
   const result = await host.api.duplicateInFolder(asset.id);
-  assert.equal(result.file, path.join(destination, '鼓点 - 副本.wav'));
+  await host.queue.idle();
+  const copy = host.library.getAsset(result.assetId);
+  assert.equal(result.file, path.join(host.root, 'assets', copy.id, '鼓点 - 副本.wav'));
+  assert.equal(copy.kind, 'audio');
+  assert.equal(copy.extension, '.wav');
+  assert.equal(copy.independentCopy, true);
+  assert.notEqual(copy.id, asset.id);
   assert.equal(await fs.readFile(result.file, 'utf8'), 'original');
+  assert.equal((await fs.readdir(host.root, { recursive: true })).filter(name => name.endsWith('.wav')).length, beforeFiles.length + 1);
+  assert.equal(host.library.snapshot().assets.length, 2);
+  assert.equal(renders, 0);
+  assert.equal(picks, 0);
+  assert.deepEqual(revealed, [result.file]);
+  assert.deepEqual(await fs.readdir(base), ['library']);
 });
 
-test('duplication rejects unknown IDs and never exports a copy into the managed library', async t => {
-  let destination;
-  const { host, source, asset } = await fixture(t, { pickDuplicateFolder: async () => [destination] });
+test('duplication rejects unknown IDs and raw paths without changing the library', async t => {
+  const { host, source, base, asset, revealed } = await fixture(t);
+  const beforeFiles = (await fs.readdir(base, { recursive: true })).sort();
+  const beforeIndex = await fs.readFile(path.join(host.root, 'library.json'), 'utf8');
   await assert.rejects(host.api.duplicateInFolder(source), /素材/);
-  await fs.unlink(source);
-  destination = path.join(host.root, 'assets');
-  await assert.rejects(host.api.duplicateInFolder(asset.id), /素材库/);
+  await assert.rejects(host.api.duplicateInFolder('unknown-asset-id'), /素材/);
+  assert.deepEqual((await fs.readdir(base, { recursive: true })).sort(), beforeFiles);
+  assert.equal(await fs.readFile(path.join(host.root, 'library.json'), 'utf8'), beforeIndex);
+  assert.deepEqual(revealed, []);
+  const valid = await host.api.duplicateInFolder(asset.id);
+  await host.queue.idle();
+  assert.equal(path.dirname(valid.file), path.join(host.root, 'assets', valid.assetId));
+  assert.equal(host.library.snapshot().assets.length, 2);
 });
 
-test('duplication refuses linked destination folders without writing through them', async t => {
-  let destination;
-  const { host, base, source, asset } = await fixture(t, { pickDuplicateFolder: async () => [destination] });
-  await fs.unlink(source);
-  destination = path.join(base, 'linked');
-  await fs.symlink(base, destination, process.platform === 'win32' ? 'junction' : 'dir');
+test('duplication refuses a linked managed source directory without copying or revealing it', async t => {
+  const { host, base, asset, revealed } = await fixture(t);
+  const managedAssets = path.join(host.root, 'assets');
+  const realAssets = path.join(host.root, 'real-assets');
+  await fs.rename(managedAssets, realAssets);
+  await fs.symlink(realAssets, managedAssets, process.platform === 'win32' ? 'junction' : 'dir');
+  const beforeFiles = (await fs.readdir(base, { recursive: true })).sort();
+  const beforeIndex = await fs.readFile(path.join(host.root, 'library.json'), 'utf8');
   await assert.rejects(host.api.duplicateInFolder(asset.id), /链接/);
-  assert.ok(!(await fs.readdir(base)).some(name => name.includes('副本')));
+  assert.deepEqual((await fs.readdir(base, { recursive: true })).sort(), beforeFiles);
+  assert.equal(await fs.readFile(path.join(host.root, 'library.json'), 'utf8'), beforeIndex);
+  assert.equal(host.library.snapshot().assets.length, 1);
+  assert.deepEqual(revealed, []);
 });
 
-test('duplicate filenames sanitize reserved characters and cannot escape the source folder', async t => {
-  const { host, base, asset } = await fixture(t);
+test('duplicate filenames sanitize reserved characters inside the new asset directory', async t => {
+  const { host, source, asset } = await fixture(t);
   await host.api.updateAsset(asset.id, { name: '../CON:*?' });
   const result = await host.api.duplicateInFolder(asset.id);
-  assert.equal(path.dirname(result.file), base);
+  await host.queue.idle();
+  assert.notEqual(result.assetId, asset.id);
+  assert.equal(path.dirname(result.file), path.join(host.root, 'assets', result.assetId));
   assert.ok(!/[<>:"/\\|?*]/.test(path.basename(result.file)));
+  assert.ok(!/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(path.basename(result.file)));
   assert.equal(await fs.readFile(result.file, 'utf8'), 'original');
+  assert.equal(await fs.readFile(source, 'utf8'), 'original');
+  assert.equal(host.library.getAsset(result.assetId).independentCopy, true);
+  assert.equal(host.library.snapshot().assets.length, 2);
 });
 
 test('AN current-document imports are deduplicated and exposed only as a host-side method', async t => {

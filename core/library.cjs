@@ -1,11 +1,15 @@
 /* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
 const fs = require('node:fs/promises');
+const { constants } = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { insidePath, atomicJson, sha256, findSidecar, copySidecar, scanFla } = require('./files.cjs');
 const { PREVIEW_RESOLUTIONS, normalizePreviewResolution } = require('./preview-resolution.cjs');
 const { normalizeCategoryScopes, validateCategoryScopes, resolveCategoryScope, assertCategoryMoveScope } = require('./category-scope.cjs');
 const { locateManagedFile } = require('./managed-file-recovery.cjs');
+const { resolveManagedPath } = require('./bridge.cjs');
+const { copyName, importedAsset, samePath } = require('./independent-copy.cjs');
+const { documentImportOptions } = require('./document-import-options.cjs');
 
 const DEFAULT_CATEGORIES = ['武器', '人物', '背景', '特效', '道具'];
 const LIKE_DURATION_MS = 24 * 60 * 60 * 1000;
@@ -163,6 +167,7 @@ function validateState(state, root) {
     if (asset.previewPosterPath) insidePath(root, asset.previewPosterPath);
     if (asset.kind != null && !['fla', 'audio'].includes(asset.kind)) throw new Error('无效的素材类型');
     if (asset.assetType != null && !['ordinary', 'effect', 'audio'].includes(asset.assetType)) throw new Error('无效的素材导入类型');
+    if (asset.independentCopy != null && typeof asset.independentCopy !== 'boolean') throw new Error('无效的独立副本标志');
     if (asset.kind === 'audio' && (!AUDIO_EXTENSIONS.includes(asset.extension) || asset.assetType !== 'audio')) throw new Error('无效的音频素材记录');
     if (asset.categoryIds != null && (!Array.isArray(asset.categoryIds) || asset.categoryIds.some(id => typeof id !== 'string' || !id))) throw new Error('素材分类列表无效');
     normalizePreviewResolution(asset.previewResolution);
@@ -325,6 +330,96 @@ class Library {
     return pending;
   }
 
+  async duplicateAsset(id) {
+    const createdFiles = [];
+    let directory;
+    let createdDirectory = false;
+    try {
+      return await this.change(async state => {
+        const original = findAsset(state, id);
+        const source = resolveManagedPath(this.root, original.managedPath, 'assets');
+        const extension = path.extname(source).toLowerCase();
+        if (original.kind === 'audio' ? !AUDIO_EXTENSIONS.includes(extension) : extension !== '.fla') throw new Error('素材文件格式无效');
+        const name = copyName(original, state.assets);
+        const copyId = randomUUID();
+        const relative = path.join('assets', copyId, name + extension);
+        const destination = insidePath(this.root, relative);
+        directory = path.dirname(destination);
+        // A fresh private directory plus exclusive copy protects every existing
+        // payload. Never hard-link: editing a copy must not edit its original.
+        await fs.mkdir(directory);
+        createdDirectory = true;
+        await fs.copyFile(source, destination, constants.COPYFILE_EXCL);
+        createdFiles.push(destination);
+        const hash = await sha256(destination);
+        if (hash !== original.hash || await sha256(source) !== hash) throw new Error('素材保存内容在复制时发生变化，请保存后重试');
+        const copy = { ...clone(original), id: copyId, name, originalName: name + extension,
+          independentCopy: true, sourcePaths: [], managedPath: relative, hash,
+          favorite: false, likedAt: null, createdAt: new Date().toISOString(), previewRevision: randomUUID() };
+        if (copy.kind !== 'audio') {
+          let reusable = original.previewStatus === 'ready' && !!original.previewPath;
+          // Rendered previews may be overwritten on the original's next save.
+          // Small preview files get their own names; the FLA is copied once.
+          if (reusable) {
+            try {
+              for (const key of ['previewPath', 'previewPosterPath']) {
+                if (!original[key]) continue;
+                const preview = resolveManagedPath(this.root, original[key], 'previews');
+                const targetRelative = `previews/${copyId}-copy-${copy.previewRevision}-${key}${path.extname(preview)}`;
+                const target = insidePath(this.root, targetRelative);
+                await fs.copyFile(preview, target, constants.COPYFILE_EXCL);
+                createdFiles.push(target);
+                copy[key] = targetRelative;
+              }
+            } catch {
+              reusable = false;
+              for (const file of createdFiles.splice(1)) await fs.rm(file, { force: true }).catch(() => {});
+            }
+          }
+          if (!reusable) Object.assign(copy, { previewPath: null, previewPosterPath: null,
+            previewStatus: 'pending', previewError: null, previewOrigin: null, previewFormat: null,
+            previewAnimated: false, previewWarning: null });
+        }
+        state.assets.push(copy);
+        return assetSnapshot(copy);
+      }, false);
+    } catch (error) {
+      for (const file of createdFiles) await fs.rm(file, { force: true }).catch(() => {});
+      if (createdDirectory) await fs.rmdir(directory).catch(() => {});
+      throw error;
+    }
+  }
+
+  configureDocumentImport(id, value) {
+    const options = documentImportOptions(value);
+    return this.change(state => {
+      const asset = findAsset(state, id);
+      if (!options) return { asset: assetSnapshot(asset), previewChanged: false };
+      if (asset.kind === 'audio') throw new Error('AN 当前文档只能是 FLA');
+      const mode = options.mode || asset.assetType;
+      if (options.categoryId) {
+        checkCategory(state, options.categoryId);
+        const category = state.categories.find(item => item.id === options.categoryId);
+        if (category.scope !== 'all' && category.scope !== mode) throw new Error('分类与所选素材类型不匹配');
+      }
+      for (const id of assetCategoryIds(asset)) {
+        const category = state.categories.find(item => item.id === id);
+        if (category && category.scope !== 'all' && category.scope !== mode) throw new Error('已有分类与所选素材类型不匹配，请先调整分类后重试');
+      }
+      const resolution = options.previewResolution === undefined ? asset.previewResolution : options.previewResolution;
+      const previewChanged = mode !== asset.assetType || options.preferExistingPreview === false
+        || (resolution !== asset.previewResolution && asset.previewOrigin !== 'sidecar');
+      asset.assetType = mode;
+      asset.previewResolution = resolution;
+      if (options.categoryId) setAssetCategories(asset, [...assetCategoryIds(asset), options.categoryId]);
+      if (previewChanged) Object.assign(asset, { previewPath: null, previewPosterPath: null, previewStatus: 'pending',
+        previewError: null, previewOrigin: null, previewFormat: null, previewAnimated: false, previewWarning: null,
+        previewFrameCount: null, previewDurationMs: null, frameRate: null, scene: null, frame: null,
+        width: null, height: null, frames: null, previewRevision: randomUUID() });
+      return { asset: assetSnapshot(asset), previewChanged };
+    }, false);
+  }
+
   importPaths(paths, { preferExistingPreview = true, mode = 'ordinary', previewResolution = null, categoryId = undefined } = {}) {
     return this.change(async (state) => {
       if (!['ordinary', 'effect', 'audio'].includes(mode)) throw new Error('导入类型无效');
@@ -356,7 +451,7 @@ class Library {
         try {
           await fs.copyFile(source, temporary);
           const hash = await sha256(temporary);
-          let asset = state.assets.find((item) => item.hash === hash && item.kind === kind);
+          let asset = importedAsset(state.assets, this.root, source, hash, kind);
           const isNew = !asset;
           if (!asset) {
             const originalName = path.basename(source);
@@ -388,7 +483,7 @@ class Library {
               previewFrameCount: null, previewDurationMs: null, frameRate: null, scene: null, frame: null, width: null, height: null, frames: null });
           }
           asset.previewAnimated ??= false;
-          if (!asset.sourcePaths.includes(source)) asset.sourcePaths.push(source);
+          if (!samePath(path.resolve(this.root, asset.managedPath), source) && !asset.sourcePaths.includes(source)) asset.sourcePaths.push(source);
           // Assign only successfully imported assets. An omitted destination
           // preserves the classification of an existing duplicate.
           if (categoryId !== undefined) setAssetCategories(asset, categoryId ? [categoryId] : []);
@@ -401,7 +496,15 @@ class Library {
           await fs.rm(temporary, { force: true });
         }
       };
-      for (const filename of paths) await scanFla(filename, visit, fail, this.root, kind === 'audio' ? AUDIO_EXTENSIONS : ['.fla']);
+      for (const filename of paths) {
+        const registered = state.assets.find(asset => (asset.kind || 'fla') === kind && samePath(path.resolve(this.root, asset.managedPath), filename));
+        if (registered) {
+          // Only an explicitly selected registered file may bypass the library
+          // exclusion. Folders and unregistered files inside it remain ignored.
+          try { await visit(resolveManagedPath(this.root, registered.managedPath, 'assets')); }
+          catch (error) { fail(filename, error); }
+        } else await scanFla(filename, visit, fail, this.root, kind === 'audio' ? AUDIO_EXTENSIONS : ['.fla']);
+      }
       result.assets = [...changed.values()];
       return result;
     }, false);
@@ -609,7 +712,8 @@ class Library {
               return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
             };
             const existing = items.find(item => (item.kind || 'fla') === (restored.kind || 'fla')
-              && (item.hash === restored.hash || storagePath(item.managedPath) === storagePath(restored.managedPath)));
+              && ((!item.independentCopy && !restored.independentCopy && item.hash === restored.hash)
+                || storagePath(item.managedPath) === storagePath(restored.managedPath)));
             if (existing) {
               mergeRestoredAsset(existing, restored);
               remapMergedAssetHistory(state.history, change.id, existing.id);

@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const assert = require('node:assert/strict');
+const { chooseThemedOption } = require('./ui-select.cjs');
 const { _electron } = require(process.env.ANSHELF_PLAYWRIGHT || 'playwright');
 const { Library } = require('../core/library.cjs');
 const root = path.resolve(__dirname, '..');
@@ -32,7 +33,7 @@ async function main() {
     await page.waitForSelector('#empty-state:not([hidden])');
     await app.evaluate(({ dialog }, source) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [source] }); }, source);
     await page.locator('[data-action="import"][data-mode="ordinary"]').click();
-    await page.locator('#import-category').selectOption(first.id); await page.locator('#prefer-preview').uncheck();
+    await chooseThemedOption(page, '#import-category', first.id); await page.locator('#prefer-preview').uncheck();
     await page.locator('[data-action="import-files"]').click();
     await page.waitForFunction(() => window.shelf.snapshot().then(state => state.assets.length === 1 && state.assets[0].previewStatus === 'ready'));
     const asset = (await snapshot()).assets[0];

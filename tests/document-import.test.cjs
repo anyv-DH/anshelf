@@ -239,3 +239,48 @@ test('a themed confirmation saves only its exact AN document and never silently 
   assert.equal(prompts, 1);
   assert.equal(saves, 1);
 });
+
+test('plugin document-import descriptor preserves selected type, category, 2K resolution and preview reuse without changing legacy requests', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-plugin-options-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, '当前特效.fla'); await fs.writeFile(file, 'saved effect');
+  const queue = new Queue(root);
+  const options = { mode: 'effect', categoryId: 'effect-child', previewResolution: 2048, preferExistingPreview: false };
+  const selected = queue.requestDocumentImport(file, options);
+  assert.deepEqual(selected.options, options);
+  assert.deepEqual(JSON.parse(await fs.readFile(queue.file(path.join('document-import/inbox', selected.requestId + '.json')), 'utf8')).options, options);
+  assert.equal(Object.hasOwn(queue.requestDocumentImport(file), 'options'), false);
+  const before = await fs.readdir(queue.file('document-import/inbox'));
+  for (const invalid of [null, [], { mode: 'audio' }, { mode: 'ordinary', extra: true }, { previewResolution: 4096 }, { categoryId: 3 }, { preferExistingPreview: 'yes' }]) assert.throws(() => queue.requestDocumentImport(file, invalid), /选项|类型|分类|分辨率|预览/);
+  assert.deepEqual(await fs.readdir(queue.file('document-import/inbox')), before);
+});
+
+test('plugin reads category choices and an existing managed effect defaults without modifying the library', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-plugin-choices-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const queue = new Queue(root), file = path.join(root, 'assets', 'material', '旋转特效.fla');
+  const metadata = { version: 1, categories: [{ id: 'effect-root', name: '特效', parentId: null, scope: 'effect' }, { id: 'effect-child', name: '旋转', parentId: 'effect-root', scope: 'effect' }, { id: 'audio', name: '音频', parentId: null, scope: 'audio' }], assets: [{ id: 'material', kind: 'fla', assetType: 'effect', managedPath: path.relative(root, file), sourcePaths: [], categoryId: 'effect-child', previewResolution: 2048 }] };
+  const index = path.join(root, 'library.json'); await fs.writeFile(index, JSON.stringify(metadata));
+  const before = await fs.readFile(index);
+  const choices = queue.documentImportSettings(file);
+  assert.deepEqual(choices.categories, metadata.categories);
+  assert.deepEqual(choices.defaults, { mode: 'effect', categoryId: 'effect-child', previewResolution: 2048, preferExistingPreview: true });
+  assert.deepEqual(queue.documentImportSettings(null).defaults, { mode: 'ordinary', categoryId: null, previewResolution: null, preferExistingPreview: true });
+  assert.deepEqual(await fs.readFile(index), before);
+  await fs.writeFile(index, '{broken');
+  assert.throws(() => queue.documentImportSettings(file), /分类|素材库/);
+  assert.equal(await fs.readFile(index, 'utf8'), '{broken');
+});
+
+test('read-only JSFL document inspection binds document id and displays the current file before any confirmation or save', async () => {
+  const code = await fs.readFile(path.join(__dirname, '../plugin/insert-whole.jsfl'), 'utf8');
+  let current = { id: 42, name: '当前特效.fla', pathURI: 'file:///C|/work/current.fla', path: 'C:\\work\\current.fla' }, saves = 0, prompts = 0;
+  const context = vm.createContext({ fl: { getDocumentDOM: () => current, saveDocument() { saves++; return true; } }, confirm() { prompts++; return true; }, JSON });
+  vm.runInContext(code, context);
+  const inspect = () => JSON.parse(context.AnShelfCurrentDocumentInfoForLibrary());
+  assert.deepEqual(inspect(), { version: 1, ok: true, documentId: 42, name: current.name, file: current.path });
+  current = { id: 43, name: '未命名-1', pathURI: null, path: null };
+  assert.equal(inspect().file, null);
+  current = null; assert.match(inspect().error, /打开/);
+  assert.equal(saves, 0); assert.equal(prompts, 0);
+});

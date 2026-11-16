@@ -1,6 +1,6 @@
 # Local release checklist
 
-## 0.3.20 cumulative public release — authorized; publication gates in progress
+## 0.3.20 cumulative public release — published 2026-11-16
 
 - [x] Separate offline feedback dialog, exact email with truthful clipboard status, local QQ QR and explicit free-use/independence wording.
 - [x] Red/green unit coverage and isolated Electron regression, both layouts/six themes/minimum window; minimum-window return clipping reproduced and fixed, originals and library hashes unchanged.
@@ -15,10 +15,11 @@
 - [ ] Full settings-window-to-real-user-library flow, unnamed-save cancellation and Animate 2024 host acceptance remain unclaimed.
 - [x] On 2026-11-16 the user explicitly authorized installer generation and publication of the new version; earlier pause is lifted. Preserve the completed local handoff above as its own evidence.
 - [x] README and Chinese release notes describe cumulative 0.3.11–0.3.20 features, 0.3.20 manager/plugin upgrade steps, free feedback/support separation and actual-host limits; no public-release success is preclaimed.
-- [ ] Build final 0.3.20 installer and portable from the reviewed source; verify source/ASAR/external resources, licenses and unchanged signed plugin runtime. Audit exact packaged EXE version, isolated user journeys and portable startup before sharing.
-- [ ] Prepare public installer/portable/plugin/usage/checksum attachments and Chinese share instructions; verify archive CRC, exact sizes and SHA256, excluding private libraries/backups/environment paths/signing keys.
-- [ ] Review and commit only authorized project code/docs/release materials, push the source and v0.3.20 tag, then publish the existing repository's new release after package gates pass.
-- [ ] Verify public release/latest/tag/download URLs and all attachment sizes/SHA256 against local artifacts; update publication evidence and desktop delivery only after success.
+- [x] Final 0.3.20 installer/portable built:171 source/ASAR files,6 demo FLA,12 plugin files and licenses match;169 extracted installer runtime files match. Exact portable passed7 isolated runtime groups with zero page errors. Evidence: `test-output/verify-release-0320.log`, `test-output/portable-release-0320/result.json`. The NSIS wizard was not executed.
+- [x] Five public installer/portable/plugin/usage/checksum attachments prepared with Chinese release instructions; ZIP CRC and exact sizes/SHA256 verified. Current release scope excludes private libraries/backups/asset-source paths/signing keys; prior Git history was not rewritten.
+- [x] Reviewed source commit `1ef1cf5f33a79511f0f32c35562f1eb456577165` and `v0.3.20` tag atomically pushed; existing repository release `447122956` published after package gates passed.
+- [x] Public release/latest/tag/download URLs and all five attachment sizes/SHA256 read back and matched local artifacts. Evidence: `test-output/github-publish-0320.log` and delivery `GitHub发布验证-0320.json`.
+- [x] Local-test shortcut/current private index backed up, old manager closed normally, desktop switched to the published portable and launched unique0.3.20 process23532. Shortcut fields and extracted runtime match; live index unchanged, AN not restarted. Evidence: `test-output/desktop-public-0320.log` and delivery `desktop-public-0320.json`.
 
 ## 0.3.19 preview and root navigation — completed; user testing pending
 

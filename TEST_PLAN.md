@@ -1,5 +1,13 @@
 # Test plan
 
+## 0.3.20 public package verification — completed 2026-11-16
+
+The user's explicit installer/publication request superseded the earlier local-only delivery boundary below. Existing final741/741 Node tests and40 fixed-EXE flows were reviewed; final package changes were documentation and third-party notices. Installer and portable were built from source commit `1ef1cf5f33a79511f0f32c35562f1eb456577165`. Audits matched171 source/ASAR files,6 demo FLA,12 plugin files and169 extracted installer runtime files. The existing Adobe-verified11-file plugin signature was retained. The NSIS wizard was not run.
+
+The exact published portable passed7 isolated real-Electron groups: packaged version0.3.20, first-run guide, six decoded demo previews, feedback/support separation and minimum window, import target selection/cancellation, second-launcher focus of the existing process, and regenerated preview revision/path with decoded pixels. Page errors, renderer network requests and external actions were zero; originals, launcher and demo/worker hashes were unchanged. Seven screenshots were inspected and temporary profiles/libraries/processes cleaned. Evidence: `test-output/portable-release-0320/result.json`.
+
+After publication, public release/latest/tag/download URLs and all five attachment sizes/SHA256 matched local artifacts. Desktop launch of the published portable matched the final build and retained the live library index hash; evidence: delivery `GitHub发布验证-0320.json`, `desktop-public-0320.json`. These package and desktop checks do not extend actual Animate host acceptance beyond the independent native-entry checks below.
+
 ## 0.3.20 feedback, community and AN clean-document import
 
 - Separate tools entry, exact author email, explicit free-use and no-donation requirement; feedback and support dialogs never mix contact/group and payment images.
@@ -9,7 +17,7 @@
 - Tests first for the import branch: saved FLA plus callable `isModified() === false` skips native save and sends the existing descriptor; modified, unnamed, unavailable/throwing/unknown modification states retain native save. Cover native-save cancellation/failure, document switching, post-save FLA validation and unchanged import-option/receipt contracts. Do not reinterpret every false save as success.
 - After final 0.3.20 plugin signing and installation, reload it and recheck clean-saved and modified FLA imports in independent real-host documents, plus unnamed-document cancellation and document binding. Record actual outcomes separately; Node/VM/Electron success does not certify Animate 2023/2024 host acceptance. Never use the user's live document or library for this regression.
 - Completed actual Animate 2023 native-entry recheck is recorded in `test-output/native-save-0320/result.json`: clean document reports `isModified:false`, native save returns false, and the fixed entry returns `ok:true`; modified document also returns `ok:true`. The previous document is restored and remains unmodified. Final 11-file Adobe signature verification and real installation are recorded in `test-output/sign-plugin-0320.log` and `test-output/install-plugin-0320.log`. These results do not certify the full native settings window through the real user library, unnamed-save cancellation or Animate 2024; keep those host boundaries explicit.
-- Isolated real Electron profile/library, unchanged original/index hashes and zero page errors; final full suite and relevant workspace/preview/plugin regressions before runtime audit and desktop switch. Manager and plugin both0.3.20; verify final Adobe signature, bundled/installed runtime bytes and source/ASAR/copied-directory hashes. Build only a complete `--win --dir` directory; no installer, portable, commit, push or publication.
+- Isolated real Electron profile/library, unchanged original/index hashes and zero page errors; final full suite and relevant workspace/preview/plugin regressions before runtime audit and desktop switch. Manager and plugin both0.3.20; verify final Adobe signature, bundled/installed runtime bytes and source/ASAR/copied-directory hashes. The initial local handoff used only a complete `--win --dir` directory; the subsequent user-authorized public-package verification is recorded above.
 
 ## 0.3.19 preview and root navigation usability
 

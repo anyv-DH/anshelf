@@ -26,7 +26,7 @@ test('audio import builds a searchable persistent library, preserving bytes and 
     assert.equal(path.extname(asset.managedPath), asset.extension);
   }
   const sound = result.assets.find(a => a.sourcePaths.length === 2);
-  const category = await library.createCategory('音效');
+  const category = await library.createCategory('打击音效');
   await library.assignCategory([sound.id], category.id);
   await library.updateAsset(sound.id, { favorite: true, tags: ['击打'] });
   const reopened = await Library.open(root);

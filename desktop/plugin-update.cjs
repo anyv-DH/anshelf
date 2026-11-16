@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { sha256 } = require('../core/files.cjs');
-const RUNTIME = ['CSXS/manifest.xml', 'META-INF/signatures.xml', 'mimetype', 'panel.js', 'style.css', 'index.html', 'queue.cjs', 'insert-whole.jsfl', 'icon.png', 'README.md'];
+const RUNTIME = ['CSXS/manifest.xml', 'META-INF/signatures.xml', 'mimetype', 'panel.js', 'style.css', 'index.html', 'import-settings.html', 'queue.cjs', 'insert-whole.jsfl', 'icon.png', 'README.md'];
 
 async function assertSafe(file) {
   let cursor = path.resolve(file);

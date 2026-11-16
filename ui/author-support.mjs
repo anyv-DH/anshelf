@@ -1,0 +1,6 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+export function openSupportAuthor({ document, closeDialog, icon }) {
+  closeDialog();
+  document.querySelector('#dialog-content').innerHTML = `<div class="dialog-heading"><div><div class="eyebrow">安屿动画</div><h2 id="dialog-title">投喂作者</h2></div><button class="icon-button" data-action="close-dialog" aria-label="关闭">${icon('close',18)}</button></div><div class="author-support"><h3>感谢您使用安安素材管理器</h3><p>愿这个小工具帮您更快找到素材，把更多时间留给创作。如果这个软件对您有帮助，欢迎投喂作者一杯咖啡。</p><p>您的每一份支持，都是持续维护、优化预览体验和开发实用功能的动力。</p><div class="author-payment-codes"><figure><img src="assets/support/qr-alipay.png" alt="收款二维码一" width="927" height="927"></figure><figure><img src="assets/support/qr-wechat.png" alt="收款二维码二" width="657" height="657"></figure></div><p class="author-gift-notice">本软件开源免费，投喂纯属自愿赠与，不换取任何商品、服务或虚拟礼物；无论是否投喂，都不影响软件的正常使用。</p><p>也欢迎到 GitHub 项目上点一颗 Star，或把安安分享给需要的创作者。感谢您的使用与每一份鼓励，祝您灵感常在，创作顺利！</p></div><div class="dialog-actions"><button class="button secondary" data-action="open-project-page">${icon('heart',15)}前往 GitHub 点 Star</button><button class="button primary" data-action="close-dialog">继续创作</button></div>`;
+  document.querySelector('#dialog').showModal();
+}

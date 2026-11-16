@@ -41,7 +41,7 @@ async function main() {
     assert.equal(await page.locator('#inspector').isVisible(), false);
     checks.push('portable EXE extracts and opens an isolated library');
     assert.match(await page.locator('.brand .anan-wordmark').evaluate(element => getComputedStyle(element).maskImage), /brand-anan\.svg/);
-    checks.push('original wordmark loads from the portable package');
+    checks.push('supplied AN monogram loads from the portable package');
     await page.locator('[data-action="demo"]').click();
     const previewDeadline = Date.now() + 90000;
     let snapshot;

@@ -1,0 +1,23 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+#dialog.preview-dialog .preview-workspace[data-details-expanded="false"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+#dialog .preview-details[hidden] { display: none; }
+#dialog .preview-media { min-width: 0; }
+#dialog.preview-dialog .dialog-heading > div:first-child { min-width: 0; }
+.preview-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.preview-return { white-space: nowrap; }
+[data-preview-title] { cursor: text; overflow-wrap: anywhere; }
+[data-preview-title]:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; border-radius: 4px; }
+.preview-title-input { width: 100%; min-width: 100px; font: inherit; color: inherit; }
+.preview-name-error { display: block; font-size: 12px; font-weight: 400; margin-top: 4px; }
+.preview-name-error[hidden] { display: none; }
+@media (max-width: 650px) {
+  .preview-heading-actions { gap: 4px; }
+  .preview-details-toggle { padding-inline: 8px; }
+}

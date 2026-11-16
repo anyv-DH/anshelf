@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
 import { icon } from './icons.js';
 
-const categorySelectors = '#import-category, #category-parent, select[data-field="category"]';
+const categorySelectors = '#import-category, #category-parent, #duplicate-category, select[data-field="category"], select[data-field="add-category"]';
 const triggerSelector = '[data-select-trigger]';
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 let sequence = 0;
@@ -52,9 +52,9 @@ export function enhanceCategorySelects(root) {
       trigger.type = 'button';
       trigger.className = 'category-picker-trigger';
       const category = select.matches(categorySelectors);
-      trigger.dataset.selectTrigger = select.id || 'asset-category';
+      trigger.dataset.selectTrigger = select.id || (select.dataset.field === 'add-category' ? 'asset-add-category' : 'asset-category');
       if (category) trigger.dataset.categoryTrigger = trigger.dataset.selectTrigger;
-      trigger.setAttribute('aria-label', select.id === 'import-category' ? '导入到文件夹' : select.id === 'category-parent' ? '上级分类' : select.id === 'preview-resolution' ? '预览最长边' : select.id === 'category-scope' ? '所属素材类型' : category ? '移动到分类' : '选择选项');
+      trigger.setAttribute('aria-label', select.id === 'import-category' ? '导入到文件夹' : select.id === 'category-parent' ? '上级分类' : select.id === 'preview-resolution' ? '预览最长边' : select.id === 'category-scope' ? '所属素材类型' : select.dataset.field === 'add-category' ? '加入其他分类' : category ? '移动到分类' : '选择选项');
       trigger.setAttribute('aria-haspopup', 'listbox');
       trigger.setAttribute('aria-expanded', 'false');
       trigger.innerHTML = `${icon(category ? 'folder' : select.id === 'preview-resolution' ? 'grid' : 'layers', 16)}<span data-category-value></span><span class="category-picker-chevron">${icon('down', 15)}</span>`;

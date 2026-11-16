@@ -53,7 +53,7 @@ test('ordinary files stay PNG while effect previews write GIF and a PNG poster',
   const fixture = await setup(t, ({ input, done }) => done(input.animate ? { ...staticResult, gif: 'data:image/gif;base64,' + gif.toString('base64'), previewAnimated: true, previewFrameCount: 2, previewDurationMs: 200 } : staticResult));
   const effect = await fixture.render(fixture.asset);
   assert.equal(effect.previewFormat, 'gif');
-  assert.equal(effect.previewPosterPath, 'previews/preview-test.png');
+  assert.equal(effect.previewPosterPath, effect.previewPath.replace(/\.gif$/, '.png'));
   assert.equal(effect.previewFrameCount, 2);
   assert.deepEqual(await fs.readFile(path.join(fixture.root, effect.previewPath)), gif);
   await fs.access(path.join(fixture.root, effect.previewPosterPath));
@@ -61,6 +61,51 @@ test('ordinary files stay PNG while effect previews write GIF and a PNG poster',
   assert.equal(ordinary.previewFormat, 'png');
   assert.equal(ordinary.previewAnimated, false);
   assert.equal(fixture.inputs[1].animate, false);
+});
+
+test('regenerating static previews preserves previous and legacy cache bytes', async t => {
+  let generation = 0;
+  const fixture = await setup(t, ({ done }) => {
+    const bytes = Buffer.from(png.split(',')[1], 'base64');
+    bytes.writeUInt32BE(++generation, 16);
+    done({ ...staticResult, png: 'data:image/png;base64,' + bytes.toString('base64') });
+  });
+  await fs.mkdir(path.join(fixture.root, 'previews'));
+  const legacy = path.join(fixture.root, 'previews/preview-test.png');
+  await fs.writeFile(legacy, 'previous-version-cache');
+  const first = await fixture.render({ ...fixture.asset, assetType: 'ordinary' });
+  const firstBytes = await fs.readFile(path.join(fixture.root, first.previewPath));
+  const second = await fixture.render({ ...fixture.asset, assetType: 'ordinary' });
+  assert.notEqual(second.previewPath, first.previewPath);
+  assert.notDeepEqual(await fs.readFile(path.join(fixture.root, second.previewPath)), firstBytes);
+  assert.deepEqual(await fs.readFile(path.join(fixture.root, first.previewPath)), firstBytes);
+  assert.equal(await fs.readFile(legacy, 'utf8'), 'previous-version-cache');
+});
+
+test('regenerating effect previews retains each animation and its matching poster', async t => {
+  let generation = 0;
+  const fixture = await setup(t, ({ done }) => {
+    const encoder = createGIF();
+    encoder.append(new Uint8Array([++generation * 20, 0, 0, 255]), 1, 1, 100);
+    encoder.append(new Uint8Array([0, 0, 255, 255]), 1, 1, 100);
+    const gif = Buffer.from(encoder.finish());
+    const poster = Buffer.from(png.split(',')[1], 'base64');
+    poster.writeUInt32BE(generation, 16);
+    done({ ...staticResult, png: 'data:image/png;base64,' + poster.toString('base64'),
+      gif: 'data:image/gif;base64,' + gif.toString('base64'), previewAnimated: true,
+      previewFrameCount: 2, previewDurationMs: 200 });
+  });
+  const first = await fixture.render(fixture.asset);
+  const oldAnimation = await fs.readFile(path.join(fixture.root, first.previewPath));
+  const oldPoster = await fs.readFile(path.join(fixture.root, first.previewPosterPath));
+  const second = await fixture.render(fixture.asset);
+  assert.notEqual(second.previewPath, first.previewPath);
+  assert.notEqual(second.previewPosterPath, first.previewPosterPath);
+  assert.equal(second.previewPosterPath, second.previewPath.replace(/\.gif$/, '.png'));
+  assert.notDeepEqual(await fs.readFile(path.join(fixture.root, second.previewPath)), oldAnimation);
+  assert.notDeepEqual(await fs.readFile(path.join(fixture.root, second.previewPosterPath)), oldPoster);
+  assert.deepEqual(await fs.readFile(path.join(fixture.root, first.previewPath)), oldAnimation);
+  assert.deepEqual(await fs.readFile(path.join(fixture.root, first.previewPosterPath)), oldPoster);
 });
 
 test('large effect bypasses animation with an explicit static warning', async t => {

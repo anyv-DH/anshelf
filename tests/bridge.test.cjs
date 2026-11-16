@@ -10,6 +10,27 @@ const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const HASH = 'a'.repeat(64);
+const INSTALL_RUNTIME_FILES = ['index.html', 'import-settings.html', 'style.css', 'icon.png', 'panel.js', 'queue.cjs', 'insert-whole.jsfl', 'README.md', 'CSXS/manifest.xml'];
+
+function installerFixture(t) {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'anshelf-bridge-installer-'));
+  t.after(() => fs.rmSync(source, { recursive: true, force: true }));
+  for (const relative of [...INSTALL_RUNTIME_FILES, 'install.ps1']) {
+    fs.mkdirSync(path.dirname(path.join(source, relative)), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, '../plugin', relative), path.join(source, relative));
+  }
+  fs.writeFileSync(path.join(source, 'mimetype'), 'application/vnd.adobe.air-ucf-package+zip');
+  const references = [...INSTALL_RUNTIME_FILES, 'mimetype'].map(relative => {
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(path.join(source, relative))).digest('base64');
+    return `<Reference URI="${relative}"><DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><DigestValue>${digest}</DigestValue></Reference>`;
+  }).join('');
+  fs.mkdirSync(path.join(source, 'META-INF'));
+  // Isolate installer integrity behavior from release signing; Adobe certificate acceptance requires real Animate.
+  fs.writeFileSync(path.join(source, 'META-INF/signatures.xml'), `<signatures><Signature xmlns="http://www.w3.org/2000/09/xmldsig#" Id="PackageSignature"><SignedInfo/><SignatureValue>AA==</SignatureValue><Object><Manifest Id="PackageContents">${references}</Manifest></Object></Signature></signatures>\r\n`);
+  fs.writeFileSync(path.join(source, 'unexpected.txt'), 'must not be installed');
+  return { source, installer: path.join(source, 'install.ps1') };
+}
+
 test('stage drop binds a short-lived request to a ready receiver and never replaces pending on rejected targets', t => {
   const {root,asset,bridge}=fixture(t);
   const statusFile=path.join(root,'bridge/status.json');
@@ -158,15 +179,16 @@ test('Windows CEP installer copies known files and rejects linked installation a
   const appData = fs.mkdtempSync(path.join(os.tmpdir(), 'anshelf-install-'));
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'anshelf-install-outside-'));
   t.after(() => { fs.rmSync(appData, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); });
-  const installer = path.join(__dirname, '../plugin/install.ps1');
+  const { source, installer } = installerFixture(t);
   const install = (...args) => spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, ...args], { encoding: 'utf8', env: { ...process.env, APPDATA: appData } });
   let result = install();
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /registry settings were not changed/);
   const base = path.join(appData, 'Adobe/CEP/extensions');
   const target = path.join(base, 'com.anshelf.receiver');
-  const expected = ['index.html', 'style.css', 'icon.png', 'panel.js', 'queue.cjs', 'insert-whole.jsfl', 'README.md', 'CSXS/manifest.xml'];
-  for (const file of expected) assert.deepEqual(fs.readFileSync(path.join(target, file)), fs.readFileSync(path.join(__dirname, '../plugin', file)));
+  const expected = [...INSTALL_RUNTIME_FILES, 'mimetype', 'META-INF/signatures.xml'];
+  for (const file of expected) assert.deepEqual(fs.readFileSync(path.join(target, file)), fs.readFileSync(path.join(source, file)));
+  for (const file of ['install.ps1', 'unexpected.txt']) assert.equal(fs.existsSync(path.join(target, file)), false);
   result = install('-CepMajor', '12');
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /registry settings were not changed/);
@@ -189,7 +211,7 @@ test('Windows CEP installer copies known files and rejects linked installation a
 test('Windows CEP debug option targets only the selected major using registry-free test doubles', { skip: process.platform !== 'win32' }, t => {
   const appData = fs.mkdtempSync(path.join(os.tmpdir(), 'anshelf-cep-major-'));
   t.after(() => fs.rmSync(appData, { recursive: true, force: true }));
-  const installer = path.join(__dirname, '../plugin/install.ps1');
+  const { installer } = installerFixture(t);
   const harness = path.join(appData, 'debug-harness.ps1');
   fs.writeFileSync(harness, `param([string]$Installer, [int]$RequestedCep = 0)
 $script:RegistryWrites = @()

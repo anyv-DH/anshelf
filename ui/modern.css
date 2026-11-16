@@ -1,0 +1,72 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+/* Classic remains the baseline; modern reserves the window width for assets. */
+.top-category-trigger, .top-more-trigger { display: none; }
+.navigation-actions { display: none; }
+.category-panel { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+:root[data-layout="modern"] .app-shell,
+:root[data-layout="modern"] .app-shell.has-inspector { grid-template-columns: minmax(0, 1fr); grid-template-rows: 42px minmax(0, 1fr); }
+:root[data-layout="modern"] .sidebar { grid-column: 1; grid-row: 1; display: flex; flex-direction: row; align-items: center; gap: 8px; height: 42px; min-height: 42px; padding: 4px 18px; border-right: 0; border-bottom: 1px solid var(--line); z-index: 20; }
+:root[data-layout="modern"] :is(.brand, .workspace-label) { display: none; }
+:root[data-layout="modern"] #navigation { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; flex: 1 1 0; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; padding: 2px; }
+:root[data-layout="modern"] #navigation::-webkit-scrollbar { display: none; }
+:root[data-layout="modern"] #navigation .nav-item { flex: 0 0 auto; width: auto; height: 30px; min-height: 30px; padding: 6px 12px; font-size: 12px; gap: 6px; border-radius: 16px; white-space: nowrap; }
+:root[data-layout="modern"] #navigation .nav-item svg { width: 14px; height: 14px; }
+:root[data-layout="modern"] #navigation .nav-item.active { color: var(--accent-ink); background: var(--accent); }
+:root[data-layout="modern"] #navigation .create-project { border: 1px dashed var(--line); }
+:root[data-layout="modern"] #navigation .create-project:hover { border-color: var(--accent); }
+:root[data-layout="modern"] .navigation-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 6px; }
+:root[data-layout="modern"] .library-toolbar .topbar { display: none; }
+:root[data-layout="modern"] :is(.top-category-trigger, .top-more-trigger) { display: inline-flex; align-items: center; justify-content: center; height: 29px; min-height: 29px; gap: 5px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: var(--surface); font-size: 11px; flex: 0 0 auto; }
+:root[data-layout="modern"] :is(.top-category-trigger, .top-more-trigger) svg { width: 14px; height: 14px; }
+:root[data-layout="modern"] :is(.top-category-trigger, .top-more-trigger)[aria-expanded="true"] { color: var(--violet); border-color: var(--accent); background: var(--accent-soft); }
+:root[data-layout="modern"] .category-panel { display: none; position: absolute; top: calc(100% + 5px); left: 18px; width: min(340px, calc(100vw - 36px)); height: min(480px, calc(100vh - 145px)); padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 14px 40px var(--shadow); }
+:root[data-layout="modern"] .categories-open .category-panel { display: flex; }
+:root[data-layout="modern"] .category-row .nav-item { min-height: 32px; padding: 6px 3px; font-size: 12px; gap: 6px; }
+:root[data-layout="modern"] .section-label { margin: 0 3px 6px; }
+:root[data-layout="modern"] .category-search { margin: 0 0 8px; }
+:root[data-layout="modern"] .category-search input { font-size: 12px; }
+:root[data-layout="modern"] .sidebar-bottom { padding: 0; margin: 0; border: 0; flex: 0 0 auto; }
+:root[data-layout="modern"] #top-more-panel { display: none; position: absolute; right: 18px; top: calc(100% + 5px); width: 240px; max-height: calc(100vh - 135px); overflow-y: auto; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 14px 40px var(--shadow); }
+:root[data-layout="modern"] .more-open #top-more-panel { display: block; }
+:root[data-layout="modern"] .theme-switch { display: none; }
+:root[data-layout="modern"] .skin-settings-trigger { min-height: 29px; margin-top: 0; background: transparent; }
+:root[data-layout="modern"] .bridge-card { padding: 8px 6px; border-radius: 6px; }
+:root[data-layout="modern"] .bridge-card strong { font-size: 10px; }
+:root[data-layout="modern"] .local-note { margin-top: 8px; }
+:root[data-layout="modern"] .main { grid-column: 1; grid-row: 2; padding: 0 18px; }
+:root[data-layout="modern"] .library-heading { display: none; }
+:root[data-layout="modern"] .asset-grid { gap: 14px; padding-top: 10px; }
+:root[data-layout="modern"] .asset-card { border-color: var(--line); border-radius: 9px; container: asset / inline-size; }
+:root[data-layout="modern"] .asset-card:hover { transform: none; border-color: var(--violet); }
+:root[data-layout="modern"] .asset-card.selected { border-color: var(--accent); }
+:root[data-layout="modern"] .card-preview { aspect-ratio: 1.08; }
+:root[data-layout="modern"] .card-preview img { padding: 10px; }
+:root[data-layout="modern"] .card-information { padding: 10px 11px 11px; }
+:root[data-layout="modern"] .card-information > .filename-row { margin-bottom: 7px; height: 19px; }
+:root[data-layout="modern"] .filename-row h3 { line-height: 19px; font-size: 13px; font-weight: 500; }
+:root[data-layout="modern"] .card-information > div { font-size: 11px; }
+:root[data-layout="modern"] .card-actions { padding-top: 9px; margin-top: 9px; gap: 6px !important; }
+:root[data-layout="modern"] .card-action { min-height: 32px; font-size: 11px; gap: 4px; padding: 7px 3px; border-radius: 5px; }
+:root[data-layout="modern"] .card-action svg { width: 13px; height: 13px; flex-shrink: 0; }
+:root[data-layout="modern"] .reveal-button { opacity: 1; }
+:root[data-layout="modern"] .library-footer { font-size: 10px; padding: 12px 0 16px; }
+:root[data-layout="modern"] .selection-bar { border-radius: 6px; margin-top: 8px; }
+@container asset (max-width: 210px) {
+  :root[data-layout="modern"] .card-information { padding-left: 9px; padding-right: 9px; }
+  :root[data-layout="modern"] .card-action { font-size: 10px; gap: 3px; }
+  :root[data-layout="modern"] .filename-row h3 { font-size: 12px; }
+}
+@container asset (max-width: 180px) {
+  :root[data-layout="modern"] .card-actions { grid-template-columns: 1fr; }
+}
+@media (max-width: 1080px) {
+  :root[data-layout="modern"] .sidebar { padding-left: 14px; padding-right: 14px; gap: 6px; }
+  :root[data-layout="modern"] #navigation .nav-item { padding-left: 10px; padding-right: 10px; font-size: 11px; gap: 5px; }
+  :root[data-layout="modern"] .main { padding: 0 14px; }
+  :root[data-layout="modern"] .asset-grid { gap: 12px; }
+}
+@media (max-width: 700px) {
+  :root[data-layout="modern"] .sidebar { padding-left: 10px; padding-right: 10px; }
+  :root[data-layout="modern"] .main { padding: 0 10px; }
+  :root[data-layout="modern"] #navigation .nav-item { padding-left: 9px; padding-right: 9px; }
+}

@@ -20,6 +20,11 @@ class PreviewQueue {
     return this.drain();
   }
   snapshot(){return{pending:this.queue.length,active:this.active};}
+  cancel(id){
+    this.queue=this.queue.filter(queued=>queued!==id);
+    this.retryRequested.delete(id);
+    this.notify();
+  }
   idle(){return this.running?new Promise(resolve=>this.waiters.push(resolve)):Promise.resolve();}
   notify(){
     try { this.changed(); } catch(_error) { /* A view callback cannot stop background processing. */ }
@@ -33,16 +38,28 @@ class PreviewQueue {
     return (current.previewRevision ?? null)!==(startedAsset.previewRevision ?? null)
       || (current.previewStatus==='ready' && current.previewOrigin==='sidecar');
   }
+  async retireUnused(result){
+    try{await this.library.retireUnusedPreview?.(result);}
+    catch(_error){/* A failed cleanup registration must not hide the usable preview. */}
+  }
   async renderOne(id,asset){
+    let result;
     try {
-      const result=await this.render(asset);
+      result=await this.render(asset);
       // Reimporting a sidecar or requesting a retry supersedes this render.
-      if(this.stale(id,asset))return;
-      await this.library.setPreview(id,{...result,previewStatus:'ready',previewOrigin:'rendered',previewError:null},asset.previewRevision ?? null);
+      if(this.stale(id,asset)){await this.retireUnused(result);return;}
+      const saved=await this.library.setPreview(id,{...result,previewStatus:'ready',previewOrigin:'rendered',previewError:null},asset.previewRevision ?? null);
+      // The revision guard can reject a commit queued behind a newer mutation.
+      if(saved&&saved.previewPath!==result.previewPath)await this.retireUnused(result);
     } catch(error) {
+      if(result)await this.retireUnused(result);
       if(this.stale(id,asset))return;
       try {
-        await this.library.setPreview(id,{previewStatus:'failed',previewError:String(error?.message||error).slice(0,500)},asset.previewRevision ?? null);
+        const message=String(error?.message||error).slice(0,500);
+        const patch=asset.previewPath
+          ?{previewStatus:'ready',previewError:message,previewWarning:'预览重新生成失败，已保留原预览：'+message}
+          :{previewStatus:'failed',previewError:message};
+        await this.library.setPreview(id,patch,asset.previewRevision ?? null);
       } catch(_metadataError) {
         // A failed metadata write (including removal during the write) must not
         // reject an unobserved drain promise or abandon the remaining queue.

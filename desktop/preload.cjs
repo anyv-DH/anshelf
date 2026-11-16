@@ -1,7 +1,18 @@
 /* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
-const {contextBridge,ipcRenderer}=require('electron');
-const methods=['snapshot','sync','importFiles','importFolder','assignCategory','addToCategory','removeFromCategory','removeFromCategories','undo','createCategory','renameCategory','deleteCategory','setCategoryPinned','updateAsset','removeAssets','retryPreview','send','status','demo','compact','openPluginFolder','openInAnimate','revealInFolder','duplicateInFolder','setTheme','windowAction'];
+const {contextBridge,ipcRenderer,webUtils}=require('electron');
+const methods=['createSceneGroup','updateSceneGroup','deleteSceneGroup','snapshot','sync','importFiles','importFolder','assignCategory','addToCategory','removeFromCategory','removeFromCategories','undo','createCategory','createProject','renameCategory','deleteCategory','setCategoryPinned','updateAsset','removeAssets','retryPreview','replacePreview','restorePreview','send','status','demo','compact','openPluginFolder','openInAnimate','revealInFolder','duplicateInFolder','setTheme','windowAction'];
 const shelf=Object.fromEntries(methods.map(method=>[method,(...args)=>ipcRenderer.invoke('shelf:call',method,args)]));
+for(const method of ['chooseImportFiles','chooseImportFolder','importSelectedPaths','cancelImportSelection'])shelf[method]=(...args)=>ipcRenderer.invoke('shelf:'+method,...args);
+shelf.stageDroppedFiles=async files=>{
+  if(!Array.isArray(files)||!files.length||files.length>20000)throw new Error('请拖入本地文件或文件夹');
+  const paths=files.map(file=>{
+    let value;
+    try{value=webUtils.getPathForFile(file);}catch{throw new Error('请拖入真实的本地文件或文件夹');}
+    if(typeof value!=='string'||!value.trim())throw new Error('请拖入真实的本地文件或文件夹');
+    return value;
+  });
+  return ipcRenderer.invoke('shelf:stage-dropped-files',paths);
+};
 shelf.onConfirmRequest=listener=>{
   if(typeof listener!=='function')throw new Error('确认回调无效');
   const handler=(_event,payload)=>listener(payload);

@@ -1,5 +1,89 @@
 # Test plan
 
+## 0.3.20 feedback, community and AN clean-document import
+
+- Separate tools entry, exact author email, explicit free-use and no-donation requirement; feedback and support dialogs never mix contact/group and payment images.
+- User-click clipboard success/failure, visible selectable fallback, repeat/open/close/Escape and stale asynchronous completion. No mail, QQ launch or feedback network request.
+- Local QR image decodes as an image, preserves the source pixel crop and quiet zone; do not equate successful image rendering with a verified group join. Cover both layouts, all six themes, minimum850×600 and wide windows.
+- Reproduce the clean saved FLA failure in an independent actual Animate 2023 document before fixing: native save returns boolean false and the old entry reports `ok:false,cancelled:true`; making a visible change lets the same entry succeed. Preserve `test-output/native-save-0320/before-fix.json` as pre-fix evidence.
+- Tests first for the import branch: saved FLA plus callable `isModified() === false` skips native save and sends the existing descriptor; modified, unnamed, unavailable/throwing/unknown modification states retain native save. Cover native-save cancellation/failure, document switching, post-save FLA validation and unchanged import-option/receipt contracts. Do not reinterpret every false save as success.
+- After final 0.3.20 plugin signing and installation, reload it and recheck clean-saved and modified FLA imports in independent real-host documents, plus unnamed-document cancellation and document binding. Record actual outcomes separately; Node/VM/Electron success does not certify Animate 2023/2024 host acceptance. Never use the user's live document or library for this regression.
+- Completed actual Animate 2023 native-entry recheck is recorded in `test-output/native-save-0320/result.json`: clean document reports `isModified:false`, native save returns false, and the fixed entry returns `ok:true`; modified document also returns `ok:true`. The previous document is restored and remains unmodified. Final 11-file Adobe signature verification and real installation are recorded in `test-output/sign-plugin-0320.log` and `test-output/install-plugin-0320.log`. These results do not certify the full native settings window through the real user library, unnamed-save cancellation or Animate 2024; keep those host boundaries explicit.
+- Isolated real Electron profile/library, unchanged original/index hashes and zero page errors; final full suite and relevant workspace/preview/plugin regressions before runtime audit and desktop switch. Manager and plugin both0.3.20; verify final Adobe signature, bundled/installed runtime bytes and source/ASAR/copied-directory hashes. Build only a complete `--win --dir` directory; no installer, portable, commit, push or publication.
+
+## 0.3.19 preview and root navigation usability
+
+- Reproduce group → member preview geometry and actual painted image bounds before fixing; cover long names, details closed/open, return-to-group, ordinary image/FLA/audio and minimum/wide windows in both layouts. Assert useful preview area and reachable actions, not only dialog containment.
+- Test root visibility/order preferences with current/hidden/new/deleted roots, corrupt and inaccessible storage, restoring hidden entries and real restart. Confirm hidden roots are directly selectable, common roots can move forward and overflow does not add header height or hide imports/tools.
+- Run meaningful Node and real isolated Electron regressions, inspect screenshots, and compare library/source hashes. Audit the complete0.3.19 runtime and unchanged signed0.3.16 plugin before updating/readback/launching the desktop shortcut. No installer or publication.
+
+## 0.3.18 onboarding
+
+- 首次空库自动显示六步页面高亮；对应真实控件，提示卡避让且不超窗；滚动后选择实际可见卡并避开固定工具栏，保持主区滚动位置；步骤直达／前后／完成可操作；X、Escape、跳过记忆，重启不再自动显示，工具重看始终第一步。
+- 两布局六主题及850×600几何、键盘焦点与滚动重置；引导关闭恢复可见焦点，AN步骤工具菜单恢复原状态；素材分类／搜索／选择／分页／播放保持。
+- 已有弹窗／busy／hidden时延后；引导与启动更新一次显示一个，库读取失败不连带阻断更新；异步导入交接防抢占。
+- 显式完成操作进入原导入／AN说明，不自动导入或安装；退出未完成不标跳过，存储损坏与不可写安全回退，无新增轮询。
+- 使用隔离profile／library，原文件与库字节不变，真实固定EXE版本和路径记录；不生成安装包，不把UI测试称为AN宿主验证。
+
+## 0.3.17 category visibility, update flow and missing effects
+
+- First reproduce custom roots being omitted, the removed more trigger breaking category clicks, suppressed startup prompts and unclassified effects having no library-removal action. Keep canonical root order, stable identities, subcategory boundaries and manual scrolling.
+- Unit tests cover reminder persistence, valid days, expiry, storage failures, dialog/idle deferral and disposal. Real isolated Electron tests cover root creation, renaming, restart and small windows; startup reminders, suppression and manual checks; one-click download/verified-launch IPC with cancellation and failures. Installer execution is intercepted, not claimed as a live external update.
+- Missing managed FLA retry must restore only from recorded hash-matching originals and never overwrite existing bytes; cover source change/missing/link, failed fallback copy, concurrent destinations, explicit-only recovery and undo. In an isolated library, copy the reported FLA read-only, reproduce missing preview, confirm/cancel/remove/undo, retry, inspect actual GIF output and restart. Hash the real index and originals before/after without publishing private paths.
+- Verify only a complete `--win --dir` runtime, bundled0.3.16 plugin signature and source/ASAR/file hashes. Run focused UI flows against the fixed0.3.17 EXE, then normally close the old manager and update/read back/start the desktop shortcut. Keep old runtime and private rollback backups; do not create installers or publish.
+
+## 0.3.16 image delivery, metadata groups and support dialog
+
+- Node tests cover image-host/transfer/native drag, queue and JSFL target/TTL contracts, group validation/persistence/undo/reimport identities, folder grouping idempotency, nested immediate-parent grouping, singleton and 200 cap, atomic failure/retry, hidden-member-safe selection and local QR provenance.
+- Real isolated Electron flows cover group creation/editing/preview/AN queue/native drag IPC, finite grouped pagination, process restart, small windows, nested folder picker and native File drops, checked/unchecked grouping, category creation retention, repeat imports, source hashes, QR rendering and fixed Star action. No Animate receiver is impersonated as live-host evidence.
+- Offline decode compares both cropped QR payloads with official source images without changing their pixels. Inspect wide and small-window support screenshots.
+- Build only `--win --dir`, audit ASAR/source and copied runtime hashes, signed0.3.16 plugin and installed bytes; run the same user journeys against the fixed executable before updating/readback/launch of the desktop shortcut. No installer or publication.
+
+## 0.3.15 finite scrolling and top actions
+
+- Reproduce scroll mode hiding pagination, appending earlier pages and revealing all preceding items. Require exactly the current page slice in both modes, including final-page leftovers and reveal-by-page.
+- Real Electron: verify complete AN logo/product name, import/tools on the root row, removed empty action row and reachable menus at 1480×940, 930×700 and minimum viewport; switch classic/modern using the same controls without duplicate IDs or lost actions.
+- With 66 isolated assets and size24, require 24/24/18 disjoint pages, no append on bottom-scroll, manual page reset to top, search/category reset and restart of saved scroll mode/count. Retain import/image/drop/copy/details/audio/appearance checks.
+- Full Node suite, source and fixed-EXE UI; inspect screenshots, audit copied runtime and unchanged signed0.3.11 plugin, then update/read back shortcut and actually launch0.3.15. No installer or publication.
+
+## 0.3.13 two-level workspace and bluewhite palette
+
+Verified 2026-11-15: Node 540/540; existing Electron regressions 30 flows; practical workspace 14 flows/11 geometry cases in both source and final packaged 0.3.13 EXE; final EXE smoke 4 groups. All passed with zero renderer errors. Fixed-EXE runtime contexts, screenshots and file hashes are recorded in the version output and PROJECT_STATE.md.
+
+- Test six protected system roots, existing-library metadata-only upgrades, untouched legacy identities/scopes/memberships, typed new assignments under legacy `scope=all` branches, project roots with mixed media, undo and restart. Hash original and managed asset bytes before/after all UI flows.
+- Verify sticky search, top-level and first-level category navigation during real content scrolling; favorites/likes stay within the active root. Check exact 7/8 columns at wide width and safe automatic reduction at 1080/930/minimum windows.
+- Keep one editable detail form inside the preview dialog, including audio. Exercise name, tags, move/add category, historical incompatible membership, slow saves and background preview refresh while an unsaved tag draft retains its node/focus/value.
+- Test four independent preview backgrounds, six allowlisted themes, both layouts, exact retained card DOM/query/page/selection and actual WAV playback. Verify bluewhite against the reference's white page, pale-gray category strip, blue selected capsules, fine borders and readable text. Restart the real process to confirm appearance and metadata persistence.
+- Run `scripts/practical-layout-ui-e2e.cjs` plus import-folder, import-preference, category-picker, custom-preview and skin regressions with isolated profiles/libraries only. Inspect screenshots at 1480×940, 930×700 and the actual minimum viewport. Record the executable/version/packaged state and consistent restart contexts when testing the delivered EXE.
+- Require the complete Node suite, clean diff check and build; create only the unpacked runtime, verify source/ASAR/external resource bytes, unchanged signed 0.3.11 plugin and full copied-directory SHA256. Gate the reversible desktop shortcut update on a passing fixed-EXE smoke and full UI report. No installer, portable package or publication before user testing.
+
+## 0.3.12 appearance and material-first layout
+
+- Test independent allowlisted layout/theme persistence, existing warm preference migration, unreadable/unwritable storage, malformed values, isolated snapshots and repeat dialog disposal. Verify all five renderer palette identities and native window backgrounds share the same contract.
+- Check modern automatic density uses a 235px target while classic defaults to 190px; explicit 4/5/6 and the 155px safety limit stay intact. Validate new palette primary, secondary, hint, success and error contrast against every solid panel.
+- Run `scripts/appearance-ui-e2e.cjs` using an isolated real Electron profile/library, synthetic FLA/PNG/WAV and more than one page. Check two layouts and five colors, retained DOM/search/category/selection/page/audio, real process restart, import/category picker, large preview and skin entry. Verify 1480×940, 1080×760, 930×700 and 850×600 with details open, menu reachability and no horizontal overflow. Inspect actual screenshots.
+- Run existing import-folder, category-picker, import-preference, custom-preview and skin UI regressions, then the full Node suite. Build only `--win --dir`, verify source/ASAR/external plugin bytes, copy and hash the complete stable directory, launch it with isolated data, and back up/read back the desktop shortcut. Do not generate installers or publish.
+
+## 0.3.11 import habits and independent AN settings
+
+- In isolated Electron profiles, change ordinary/effect preview reuse and custom resolution to 2K, close/cancel the picker, reopen and restart. Verify separate mode habits, audio isolation, remembered disabled value and no remembered category/path. Corrupt or unavailable local storage must not block import.
+- Reproduce the newly reported import-folder failure. From the import dialog create a top-level folder and a child folder, verify immediate target selection, preview/type settings preserved, real IPC import into that exact category, persisted membership after restart and unchanged external originals. Cover create failure/cancellation and compatible parent scopes.
+- Keep the main CEP panel at 40×80 or 48×88 while opening an independent settings extension. Cancel, Escape, close and accept must make no resize call on the main panel. Keep its existing extension ID, two actions, tooltip and paste flow. Check dialog keyboard/search/layout and page errors separately from actual AN hosting.
+- The requested Modeless window must use `AutoVisible=true` without a startup event; an `opened` page handshake or `isWindowVisible` result is insufficient. Reproduce the hidden-window report in actual Animate, reload the signed final plugin and observe the native window opening, cancelling and reopening while retaining the panel geometry. Do not save the user's live document during this check.
+- Repeat settings open/cancel/unload and count resources: one main-panel timer/listener, no settings-window polling, and no retained listeners after unload. Build category paths/scopes once per settings snapshot so repeated searches do not traverse all parent records again.
+- Cover no AN document callback, late callbacks, repeated clicks, dialog-open failure, stale window responses, document switch before confirmation/save, no-save cancellation and exactly one request. Remember preview habits without changing existing asset defaults.
+- Drop filesystem notifications and fail/recover the watcher: one serialized drain, valid receipt deduplication, errors returned, one unreferenced recovery timer and no callbacks after shutdown.
+- User's latest request resumes local delivery for testing after the earlier pause in chat “4445”. Re-sign and verify the final plugin, build the runnable Windows directory, repeat affected journeys against that build, install the verified plugin and update/read back the desktop shortcut with a rollback copy. Defer installer/portable packages until after user testing; remote publication remains paused and actual AN checks stay separate.
+
+## 0.3.11 preview replacement acceptance
+
+- Use only isolated libraries. Cover native-picker cancel, unsupported/invalid images, PNG/GIF decoding, atomic-index failure and original-file byte preservation.
+- Replace repeatedly and restore each previous preview after restart. Verify classifications and later metadata edits remain intact; generic undo cannot restore stale preview fields.
+- Verify exact 48-hour expiry, startup cleanup, shared image/removal-undo protection, path traversal/link refusal, locked-file retry and timer disposal on exit.
+- Block a render, replace or restore its preview, then complete it; old work must not overwrite the active preview or run a queued retry. Regeneration produces independent image/poster paths and retains old bytes.
+- Run the real Electron flow in dark/warm themes at 930×700: inspector/lightbox replacement, cancellation preserving zoom, immediate image refresh, restart recovery, regeneration completion and no page errors. Repeat the new journey against the final package and run portable smoke.
+- Run all unit/integration tests, build both Windows packages, verify packaged-source/plugin equality and delivery CRC/SHA256. AN host verification is outside this preview-only change.
+
 ## 0.3.10 acceptance — pending final verification
 
 Use isolated temporary libraries and public/synthetic AN documents. Do not mutate the private live library or copy its assets into test evidence. The requirements below are checks to run; they are not claims of final success.

@@ -3,24 +3,34 @@ import { assetCategoryIds, assetFilename, assetMode, categoryCount, categoryPath
 import { icon } from './icons.js';
 import { planRemoval } from './removal.mjs';
 import { formatTime } from './audio-controller.mjs';
+import { renderAssetDetails } from './asset-details.mjs';
+import { SYSTEM_LABELS, libraryNavigation, collectionAssets, mediaCategory } from './library-navigation.mjs';
+import { rootNavigationView } from './root-navigation.mjs';
+import { createCategoryCompatibility } from './category-compatibility.mjs';
+import { createCategoryAssignmentNavigation } from './category-assignment-navigation.mjs';
 import { pageAssets } from './pagination.mjs';
+import { resolveBrowseLayout, applyBrowseLayout } from './browse-preferences.mjs';
 import { categoryBrowser, categoryTrail, favoriteCategoryGroups, favoriteCategoryMatches } from './category-browser.mjs';
+import { filterSceneAssets, collapseSceneGroups, sceneGroupCard } from './scene-groups.mjs';
 
 export const filename = assetFilename;
-const origin = asset => ['existing', 'sidecar', 'external'].includes(asset.previewOrigin) ? '同名预览图' : '自动预览';
+const origin = asset => asset.previewOrigin === 'custom' ? '自定义预览图' : ['existing', 'sidecar', 'external'].includes(asset.previewOrigin) ? '同名预览图' : '自动预览';
+const previewReplacement = asset => `<div class="preview-replacement"><div class="preview-replacement-actions"><button class="text-button" data-action="replace-preview" data-id="${e(asset.id)}" title="选择本地图片，更换这份素材的预览图">${icon('refresh', 14)}更换预览图</button><button class="text-button" data-action="retry" data-id="${e(asset.id)}" title="从当前素材文件重新生成预览">${icon('refresh', 14)}重新生成预览</button>${Number(asset.previewUndoUntil) > Date.now() ? `<button class="text-button" data-action="restore-preview" data-id="${e(asset.id)}" title="恢复这次更换前的预览图">${icon('undo', 14)}撤回预览更换</button>` : ''}</div><p>48 小时内可撤回。旧预览缓存保留两天，到期后在软件运行时自动清理；原图片文件不受影响。</p></div>`;
 const format = asset => (asset.extension || '.fla').slice(1).toUpperCase();
 const audioArt = () => `<div class="audio-art" aria-hidden="true"><span class="audio-disc">${icon('music', 28)}</span><span class="audio-wave">${Array.from({ length: 19 }, (_, index) => `<i style="--bar-height:${12 + ((index * 17 + 11) % 34)}px"></i>`).join('')}</span></div>`;
 const audioButton = asset => `<button class="card-action audio-play" data-action="play-audio" data-id="${e(asset.id)}" aria-label="试听${e(filename(asset))}">${icon('play', 13)}<span>试听</span></button>`;
 const dragHandle = (asset, className = 'drag-handle') => {
+  if (asset.kind === 'image') return `<span class="${className}" data-drag-id="${e(asset.id)}" draggable="true" title="拖入 AN 导入图片" aria-label="拖出图片到 AN">${icon('grip', 14)}<span>拖出</span></span>`;
   const audio = assetMode(asset) === 'audio';
   return `<span class="${className}" data-drag-id="${e(asset.id)}" ${audio ? 'draggable="true"' : 'data-stage-drag-id="' + e(asset.id) + '"'} title="${audio ? '拖入剪映或 AN 导入音频' : '拖到 AN 舞台，松开后自动粘贴'}" aria-label="${audio ? '拖出音频到剪映或 AN' : '拖到 AN 舞台自动粘贴'}">${icon('grip', 14)}<span>拖出</span></span>`;
 };
 
 export const categoryOptions = (categories, selected = '', exclude = new Set()) => categories.filter(item => !exclude.has(item.id)).map(item => `<option value="${e(item.id)}" ${selected === item.id ? 'selected' : ''}>${e(categoryPath(categories, item.id))}</option>`).join('');
 
-export function previewDialog(asset) {
+export function previewDialog(asset, snapshot = {}) {
   const isAudio = assetMode(asset) === 'audio';
-  return `<div class="dialog-heading"><div><div class="eyebrow">${isAudio ? 'AUDIO' : 'PREVIEW'}</div><h2 id="dialog-title">${e(filename(asset))}</h2></div><button class="icon-button" data-action="close-dialog" aria-label="关闭预览">${icon('close', 19)}</button></div>${isAudio ? `<div class="audio-lightbox">${audioArt()}${audioButton(asset)}<p>试听后，将下方拖拽区域拖入剪映或 AN。</p></div>` : `<div class="lightbox-preview checkerboard" data-preview-viewport tabindex="0" role="region" aria-label="素材预览，滚轮缩放，拖动平移，加减号缩放，0重置">${preview(asset, true)}</div><div class="preview-tools"><span>滚轮缩放 · 拖动查看</span><div class="zoom-controls" role="group" aria-label="预览缩放"><button class="icon-button" data-zoom="out" aria-label="缩小">−</button><output data-zoom-label aria-live="polite">100%</output><button class="icon-button" data-zoom="in" aria-label="放大">+</button><button class="text-button" data-zoom="reset">重置</button></div></div>`}<div class="lightbox-actions">${dragHandle(asset, 'drag-handle lightbox-drag')}<button class="button secondary" data-action="duplicate-file" data-id="${e(asset.id)}" title="创建独立可编辑的新素材并自动入库，不影响原素材">${icon('copy', 16)}复制并入库</button><button class="button secondary" data-action="reveal-file" data-id="${e(asset.id)}">${icon('folder', 16)}文件位置</button>${isAudio ? '' : `<button class="button secondary" data-action="open-animate" data-id="${e(asset.id)}">${icon('file', 16)}用 AN 打开</button><button class="button primary" data-action="send" data-id="${e(asset.id)}">${icon('arrow', 17)}粘贴到舞台</button>`}</div>`;
+  const isImage = asset.kind === 'image' || asset.assetType === 'image';
+  return `<div class="dialog-heading"><div><div class="eyebrow">${isAudio ? 'AUDIO' : 'PREVIEW'}</div><h2 id="dialog-title">${e(filename(asset))}</h2></div><button class="icon-button" data-action="close-dialog" aria-label="关闭预览">${icon('close', 19)}</button></div><div class="preview-workspace"><div class="preview-media">${isAudio ? `<div class="audio-lightbox">${audioArt()}${audioButton(asset)}<p>试听后，将下方拖拽区域拖入剪映或 AN。</p></div>` : `<div class="lightbox-preview checkerboard" data-preview-viewport tabindex="0" role="region" aria-label="素材预览，滚轮缩放，拖动平移，加减号缩放，0重置">${preview(asset, true)}</div><div class="preview-tools"><span>滚轮缩放 · 拖动查看</span><div class="zoom-controls" role="group" aria-label="预览缩放"><button class="icon-button" data-zoom="out" aria-label="缩小">−</button><output data-zoom-label aria-live="polite">100%</output><button class="icon-button" data-zoom="in" aria-label="放大">+</button><button class="text-button" data-zoom="reset">重置</button></div></div>`}${isAudio || isImage ? '' : previewReplacement(asset)}<div class="lightbox-actions">${dragHandle(asset, 'drag-handle lightbox-drag')}<button class="button secondary" data-action="duplicate-file" data-id="${e(asset.id)}" title="创建独立可编辑的新素材并自动入库，不影响原素材">${icon('copy', 16)}复制并入库</button><button class="button secondary" data-action="reveal-file" data-id="${e(asset.id)}">${icon('folder', 16)}文件位置</button>${isImage ? `<button class="button primary" data-action="send" data-id="${e(asset.id)}">${icon('arrow', 17)}导入 AN</button>` : isAudio ? '' : `<button class="button secondary" data-action="open-animate" data-id="${e(asset.id)}">${icon('file', 16)}用 AN 打开</button><button class="button primary" data-action="send" data-id="${e(asset.id)}">${icon('arrow', 17)}粘贴到舞台</button>`}</div></div><aside class="preview-details" aria-label="素材详情">${renderAssetDetails(asset, snapshot)}</aside></div>`;
 }
 
 function preview(asset, large = false) {
@@ -32,7 +42,7 @@ function preview(asset, large = false) {
     if (animated && !large) return `<span class="animation-cover ${poster ? '' : 'no-poster'}">${poster ? `<img src="${e(poster)}" alt="${e(filename(asset))}的静态预览" loading="lazy" draggable="false">` : `${icon('spark', 34)}<small>悬停播放动图</small>`}</span><img class="animated-image" data-hover-animation="${e(animatedUrl)}" ${poster ? `data-poster="${e(poster)}"` : ''} alt="${e(filename(asset))}的动态预览" draggable="false" hidden>`;
     return `<img src="${e(animated ? animatedUrl : asset.previewUrl)}" alt="${e(filename(asset))}的预览" loading="${large ? 'eager' : 'lazy'}" draggable="false">`;
   }
-  return `<div class="preview-placeholder ${state}">${state === 'error' ? icon('alert', large ? 32 : 26) : '<span class="spinner"></span>'}<span>${state === 'error' ? '暂时无法预览' : '正在生成预览'}</span>${large && state === 'error' ? '<small>文件仍可发送到 AN</small>' : ''}</div>`;
+  return `<div class="preview-placeholder ${state}"${state === 'error' && asset.previewError ? ` title="${e(asset.previewError)}"` : ''}>${state === 'error' ? icon('alert', large ? 32 : 26) : '<span class="spinner"></span>'}<span>${state === 'error' ? '暂时无法预览' : '正在生成预览'}</span>${large && state === 'error' && asset.kind !== 'image' && asset.assetType !== 'image' ? '<small>请重新生成预览或查看下方详情中的原因</small>' : ''}</div>`;
 }
 
 export function categoryName(state) {
@@ -43,9 +53,26 @@ export function categoryName(state) {
 
 export function renderSidebar(state) {
   const { assets, categories } = state.snapshot;
-  const modes = { ordinary: 'ordinary', effects: 'effect', audio: 'audio' };
-  const nav = (id, name, glyph) => { const active = modes[id] ? state.typeScope === modes[id] : state.category === id; return `<button class="nav-item ${active ? 'active' : ''}" data-action="category" data-id="${e(id)}" ${active ? 'aria-current="page"' : ''}>${icon(glyph)}<span>${e(name)}</span><small>${categoryCount(assets, id, categories, modes[id] || id === 'all' ? 'all' : state.typeScope || 'all')}</small></button>`; };
-  document.querySelector('#navigation').innerHTML = nav('all', '全部素材', 'grid') + `<div class="asset-type-nav">${nav('ordinary', '普通素材', 'file')}${nav('effects', '特效素材', 'spark')}${nav('audio', '音频素材', 'music')}</div>` + nav('favorites', '我的收藏', 'heart') + nav('liked', '今日点赞', 'like') + nav('uncategorized', '未分类', 'folder');
+  const view = libraryNavigation(categories, state.category);
+  const roots = rootNavigationView(view.roots, view.root?.id, state.rootNavigationPreferences);
+  const nav = (id, name, glyph, systemKey = '') => {
+    const active = id === 'all' ? state.category === 'all' : view.root?.id === id;
+    const temporary = roots.temporaryId === id;
+    return '<button class="nav-item '+(active ? 'active' : '')+(temporary ? ' root-temporary' : '')+'" data-action="category" data-id="'+e(id)+'" '+(systemKey ? 'data-system-key="'+e(systemKey)+'"' : '')+' '+(active ? 'aria-current="page"' : '')+(temporary ? ' title="当前分类，未常驻顶部；离开后收起"' : '')+'>'+icon(glyph)+'<span>'+e(name)+'</span></button>';
+  };
+  const navigation = document.querySelector('#navigation'), activeRoot = view.root?.id || state.category;
+  const previousRoot = navigation.dataset.activeRoot, scrollLeft = navigation.scrollLeft;
+  navigation.innerHTML = nav('all', '全部', 'grid') + roots.visible.map(item => nav(item.id, SYSTEM_LABELS[item.systemKey] || item.name, item.kind === 'project' ? 'folder' : ({ effect: 'spark', audio: 'music', character: 'file', scene: 'grid', prop: 'folder', expression: 'heart' })[item.systemKey] || 'folder', item.systemKey)).join('') + '<button class="nav-item create-project" data-action="create-project" title="创建一部剧的项目素材文件夹">'+icon('plus', 14)+'<span>新建项目</span></button>';
+  navigation.scrollLeft = scrollLeft;
+  navigation.dataset.activeRoot = activeRoot;
+  if (activeRoot !== previousRoot && navigation.scrollWidth > navigation.clientWidth) {
+    const active = navigation.querySelector('[aria-current="page"]');
+    if (active) {
+      const bounds = navigation.getBoundingClientRect(), selected = active.getBoundingClientRect();
+      if (selected.left < bounds.left) navigation.scrollLeft += selected.left - bounds.left;
+      else if (selected.right > bounds.right) navigation.scrollLeft += selected.right - bounds.right;
+    }
+  }
   const tree = document.querySelector('#categories'), scrollTop = tree.scrollTop;
   const rows = categoryTree(categories, state.categoryQuery || '', state.collapsedCategories || new Set());
   tree.innerHTML = rows.length ? rows.map((item, index) => `<div class="category-node" style="--depth:${item.depth}"><div class="category-row ${item.pinned ? 'is-pinned' : ''}" data-category="${e(item.id)}">${item.hasChildren ? `<button class="category-fold" data-action="toggle-category" data-id="${e(item.id)}" aria-expanded="${!item.collapsed}" aria-label="${item.collapsed ? '展开' : '收起'}${e(item.name)}">${icon('chevron', 12)}</button>` : '<span class="category-fold-spacer"></span>'}<button class="nav-item ${state.category === item.id ? 'active' : ''}" data-action="category" data-id="${e(item.id)}" title="${e(categoryPath(categories, item.id))}"><span class="folder-color color-${index % 5}">${icon('folder', 15)}</span><span>${e(item.name)}</span><small>${categoryCount(assets, item.id, categories, state.typeScope || 'all')}</small></button><span class="category-row-actions"><button class="category-pin icon-button ${item.pinned ? 'pinned' : ''}" data-action="pin-category" data-id="${e(item.id)}" aria-pressed="${!!item.pinned}" title="${item.pinned ? '取消置顶' : '置顶分类'}" aria-label="${item.pinned ? '取消置顶' : '置顶'}${e(item.name)}">${icon('pin', 12)}</button><button class="category-menu icon-button" data-action="edit-category" data-id="${e(item.id)}" title="管理${e(item.name)}" aria-label="管理${e(item.name)}">${icon('more', 13)}</button></span></div></div>`).join('') : `<p class="category-empty">${state.categoryQuery ? '没有匹配的分类' : '给素材一个小小的归处'}</p>`;
@@ -67,38 +94,58 @@ function renderFavoriteCategories(state) {
 
 export function renderSubcategories(state) {
   const bar = document.querySelector('#subcategories');
-  if (!bar) return;
-  if (state.category === 'favorites') return renderFavoriteCategories(state);
   const { categories, assets } = state.snapshot;
-  const view = categoryBrowser(categories, assets, state.category, state.typeScope);
-  bar.hidden = !view.visible;
-  if (!view.visible) return;
+  const view = libraryNavigation(categories, state.category);
   const scroll = bar.querySelector('.subcategory-folders')?.scrollLeft || 0;
-  const parent = categories.find(item => item.id === view.parentId);
-  bar.innerHTML = `${view.parentId ? `<button class="button secondary subcategory-up" data-action="category" data-id="${e(view.parentId)}" title="返回${e(parent?.name || ({ all: '全部素材', ordinary: '普通素材', effects: '特效素材', audio: '音频素材' })[view.parentId] || '上一级')}" aria-label="返回上一级">${icon('chevron', 13)}上一级</button>` : '<span class="subcategory-caption">类目</span>'}<div class="subcategory-folders">${view.children.map(item => `<button class="button secondary subcategory-folder" data-action="category" data-id="${e(item.id)}" title="${e(categoryPath(categories, item.id))}"><span>${e(item.name)}</span><small>${categoryCount(assets, item.id, categories, state.typeScope || 'all')}</small>${categories.some(child => child.parentId === item.id) ? icon('chevron', 11) : ''}</button>`).join('')}${view.children.length ? '' : '<span class="subcategory-empty">暂无子类目</span>'}</div><button class="button secondary subcategory-add icon-button" data-action="add-subcategory" aria-label="新建子类目" title="新建子类目">${icon('plus', 15)}</button>`;
+  const baseId = view.root?.id || 'all';
+  const tab = (label, action, id, active, extra = '') => '<button class="subcategory-folder '+(active ? 'is-current' : '')+'" data-action="'+action+'" data-id="'+e(id)+'" '+extra+' aria-current="'+(active ? 'page' : 'false')+'">'+e(label)+'</button>';
+  bar.hidden = false;
+  bar.innerHTML = '<div class="subcategory-folders">'+tab('全部', 'category', baseId, state.category === baseId && (!state.collection || state.collection === 'all'))+view.children.map(item => tab(item.name, 'category', item.id, view.firstSelected === item.id && (!state.collection || state.collection === 'all'))).join('')+
+    '<button class="subcategory-add icon-button" data-action="add-root-subcategory" data-id="'+e(view.root?.id || '')+'" aria-label="新建子分类" title="'+(view.root ? '新建子分类' : '新建分类')+'">'+icon('plus',15)+'</button>'+
+    '<span class="subcategory-divider"></span>'+tab('点赞', 'collection', '', state.collection === 'liked', 'data-collection="liked"')+tab('收藏', 'collection', '', state.collection === 'favorites', 'data-collection="favorites"')+
+    (!view.root ? tab('未分类', 'category', 'uncategorized', state.category === 'uncategorized') : '')+'</div>';
   bar.querySelector('.subcategory-folders').scrollLeft = scroll;
+  const deep = document.querySelector('#deepcategories');
+  if (deep) {
+    deep.hidden = view.path.length < 2;
+    deep.innerHTML = view.path.length < 2 ? '' : '<span class="deepcategory-path">'+e(view.path.slice(1).map(x=>x.name).join(' / '))+'</span>'+ (view.path.length > 2 ? tab('上一级', 'category', view.path.at(-2).id, false) : '') + view.deeper.map(item => tab(item.name, 'category', item.id, false)).join('') + '<button class="text-button" data-action="add-subcategory">'+icon('plus',13)+'新建子分类</button>';
+  }
 }
 
 export function renderGrid(state) {
   const focusedId = document.activeElement?.closest('.asset-card')?.dataset.asset;
-  let matches = visibleAssets(state.snapshot.assets, state.category, state.query, state.sort, state.snapshot.categories, state.typeScope || 'all', { hideChildCategories: state.hideChildCategories });
+  let matches = visibleAssets(state.snapshot.assets, mediaCategory(state.snapshot.categories, state.category), '', state.sort, state.snapshot.categories, state.typeScope || 'all', { hideChildCategories: state.hideChildCategories });
+  matches = filterSceneAssets(matches, state.snapshot.sceneGroups, state.query);
+  matches = collectionAssets(matches, state.collection);
   if (state.category === 'favorites' && state.favoriteCategory !== 'all') matches = matches.filter(asset => favoriteCategoryMatches(state.snapshot.categories, asset, state.favoriteCategory));
-  const view = [state.category, state.favoriteCategory || 'all', state.typeScope || 'all', state.query, state.sort, !!state.hideChildCategories].join('\u0000');
+  const matchedCount = matches.length;
+  matches = collapseSceneGroups(matches, state.snapshot.sceneGroups);
+  const browse = resolveBrowseLayout(state.browsePreferences, state.browseViewport);
+  // Measured capacity can change when selection or playback controls appear.
+  // Only a different view resets the page; pageAssets clamps capacity changes.
+  const view = [state.category, state.collection || 'all', state.favoriteCategory || 'all', state.typeScope || 'all', state.query, state.sort, !!state.hideChildCategories, browse.mode].join('\u0000');
   if (state.pageView !== view) { state.page = 0; state.pageView = view; }
   if (state.revealAssetId) {
-    const index = matches.findIndex(asset => asset.id === state.revealAssetId);
-    if (index >= 0) state.page = Math.floor(index / pageAssets(matches).size);
+    const index = matches.findIndex(asset => asset.id === state.revealAssetId || asset.sceneMemberIds?.includes(state.revealAssetId));
+    if (index >= 0) state.page = Math.floor(index / browse.size);
     delete state.revealAssetId;
   }
-  const pagination = pageAssets(matches, state.page || 0), assets = pagination.items;
+  const pagination = pageAssets(matches, state.page || 0, browse.size);
+  const assets = pagination.items;
+  state.browseLayout = browse;
+  state.browseTotal = matches.length;
+  applyBrowseLayout(document.querySelector('#asset-grid'), browse);
   state.page = pagination.page; state.pages = pagination.pages;
   state.visible = assets.map(asset => asset.id);
-  document.querySelector('#asset-count').textContent = `${matches.length} 个素材`;
+  state.visibleSelection = assets.flatMap(asset => asset.sceneMemberIds || [asset.id]);
+  state.visibleGroups = new Map(assets.filter(a => a.sceneGroup).map(a => [a.sceneGroup.id, a.sceneMemberIds]));
+  document.querySelector('#asset-count').textContent = `${matchedCount} 个素材${matches.length !== matchedCount ? ' · ' + matches.length + ' 项' : ''}`;
   document.querySelector('#asset-grid').innerHTML = assets.map(asset => {
-    const selected = state.selected.has(asset.id), isAudio = assetMode(asset) === 'audio', status = isAudio ? 'ready' : previewState(asset);
+    if (asset.sceneGroup) return sceneGroupCard(asset, asset.sceneMemberIds.every(id => state.selected.has(id)));
+    const selected = state.selected.has(asset.id), isAudio = assetMode(asset) === 'audio', isImage = asset.kind === 'image' || asset.assetType === 'image', status = isAudio || isImage ? 'ready' : previewState(asset);
     return `<article class="asset-card ${selected ? 'selected' : ''} ${isAudio ? 'audio-card' : ''}" data-asset="${e(asset.id)}" tabindex="0" aria-label="${e(filename(asset))}" aria-selected="${selected}">
-      <div class="card-preview ${isAudio ? 'audio-card-preview' : 'checkerboard'}"><button class="preview-trigger" data-action="${isAudio ? 'play-audio' : 'zoom-preview'}" data-id="${e(asset.id)}" title="${isAudio ? '点击试听音频' : '点击放大预览'}" aria-label="${isAudio ? '试听' : '放大'}${e(filename(asset))}">${isAudio ? audioArt() : preview(asset)}</button><span class="format-badge">${e(format(asset))}${!isAudio && asset.previewFormat === 'gif' ? ' · GIF' : ''}</span><button class="favorite-button ${asset.favorite ? 'is-favorite' : ''}" data-action="favorite" data-id="${e(asset.id)}" aria-label="${asset.favorite ? '取消收藏' : '收藏'}${e(filename(asset))}" aria-pressed="${!!asset.favorite}">${icon('heart', 16)}</button><button class="like-button ${isLiked(asset) ? 'is-liked' : ''}" data-action="like" data-id="${e(asset.id)}" aria-label="${isLiked(asset) ? '取消点赞' : '点赞'}" aria-pressed="${isLiked(asset)}">${icon('like', 15)}</button><span class="zoom-hint">${icon(isAudio ? 'play' : 'zoom', 15)}</span><span class="selected-mark">${icon('check', 13)}</span>${!isAudio ? dragHandle(asset) : ''}</div>
-      <div class="card-information"><div class="filename-row"><h3 title="${e(filename(asset))}">${e(filename(asset))}</h3><button class="reveal-button duplicate-button" data-action="duplicate-file" data-id="${e(asset.id)}" title="复制并加入素材库，可独立编辑" aria-label="复制并加入素材库：${e(filename(asset))}">${icon('copy', 14)}</button><button class="reveal-button" data-action="reveal-file" data-id="${e(asset.id)}" title="在文件夹中显示" aria-label="在文件夹中显示${e(filename(asset))}">${icon('folder', 14)}</button></div><div><span class="preview-origin ${status}">${isAudio ? '本地音频' : status === 'error' ? '预览失败' : status === 'pending' ? '生成中' : origin(asset)}</span><span>${isAudio ? formatTime(asset.duration) : asset.frames ? `${Number(asset.frames)} 帧` : assetMode(asset) === 'effect' ? '特效素材' : 'AN 素材'}</span></div><div class="card-actions">${isAudio ? `${audioButton(asset)}${dragHandle(asset, 'card-action drag-handle audio-drag')}` : `<button class="card-action open" data-action="open-animate" data-id="${e(asset.id)}">${icon('file', 13)}用 AN 打开</button><button class="card-action paste" data-action="send" data-id="${e(asset.id)}">${icon('arrow', 13)}粘贴到舞台</button>`}</div></div>
+      <div class="card-preview ${isAudio ? 'audio-card-preview' : 'checkerboard'}"><button class="preview-trigger" data-action="zoom-preview" data-id="${e(asset.id)}" title="${isAudio ? '查看音频详情并试听' : '点击放大预览'}" aria-label="${isAudio ? '查看详情' : '放大'}${e(filename(asset))}">${isAudio ? audioArt() : preview(asset)}</button><span class="format-badge">${e(format(asset))}${!isAudio && asset.previewFormat === 'gif' ? ' · GIF' : ''}</span><button class="favorite-button ${asset.favorite ? 'is-favorite' : ''}" data-action="favorite" data-id="${e(asset.id)}" aria-label="${asset.favorite ? '取消收藏' : '收藏'}${e(filename(asset))}" aria-pressed="${!!asset.favorite}">${icon('heart', 16)}</button><button class="like-button ${isLiked(asset) ? 'is-liked' : ''}" data-action="like" data-id="${e(asset.id)}" aria-label="${isLiked(asset) ? '取消点赞' : '点赞'}" aria-pressed="${isLiked(asset)}">${icon('like', 15)}</button><span class="zoom-hint">${icon(isAudio ? 'play' : 'zoom', 15)}</span><span class="selected-mark">${icon('check', 13)}</span>${!isAudio ? dragHandle(asset) : ''}</div>
+      <div class="card-information"><div class="filename-row"><h3 title="${e(filename(asset))}">${e(filename(asset))}</h3><button class="reveal-button duplicate-button" data-action="duplicate-file" data-id="${e(asset.id)}" title="复制并加入素材库，可独立编辑" aria-label="复制并加入素材库：${e(filename(asset))}">${icon('copy', 14)}</button><button class="reveal-button" data-action="reveal-file" data-id="${e(asset.id)}" title="在文件夹中显示" aria-label="在文件夹中显示${e(filename(asset))}">${icon('folder', 14)}</button></div><div><span class="preview-origin ${status}">${isAudio ? '本地音频' : isImage ? '本地图片' : status === 'error' ? '预览失败' : status === 'pending' ? '生成中' : origin(asset)}</span><span>${isAudio ? formatTime(asset.duration) : isImage ? (asset.width && asset.height ? `${Number(asset.width)} × ${Number(asset.height)}` : '图片素材') : asset.frames ? `${Number(asset.frames)} 帧` : assetMode(asset) === 'effect' ? '特效素材' : 'AN 素材'}</span></div><div class="card-actions">${isAudio ? `${audioButton(asset)}${dragHandle(asset, 'card-action drag-handle audio-drag')}` : isImage ? `<button class="card-action" data-action="zoom-preview" data-id="${e(asset.id)}">${icon('zoom', 13)}查看图片</button><button class="card-action paste" data-action="send" data-id="${e(asset.id)}">${icon('arrow', 13)}导入 AN</button>` : `<button class="card-action open" data-action="open-animate" data-id="${e(asset.id)}">${icon('file', 13)}用 AN 打开</button><button class="card-action paste" data-action="send" data-id="${e(asset.id)}">${icon('arrow', 13)}粘贴到舞台</button>`}</div></div>
     </article>`;
   }).join('');
   const pager = document.querySelector('#asset-pagination');
@@ -119,15 +166,33 @@ export function renderGrid(state) {
 export function renderSelection(state) {
   const bar = document.querySelector('#selection-bar');
   const focused = document.activeElement;
+  const focusedSearch = focused?.id === 'quick-category-filter' ? { start: focused.selectionStart, end: focused.selectionEnd } : null;
   const focusedAction = bar.contains(focused) && focused.matches('button[data-action]')
     ? { action: focused.dataset.action, id: focused.dataset.id } : null;
   bar.hidden = state.selected.size === 0;
-  if (!state.selected.size) return;
+  if (!state.selected.size) { state.quickCategoryParentId = null; state.quickCategorySelectionKey = ''; return; }
   const adding = state.quickCategoryMode === 'add';
-  const removal = planRemoval(state), scoped = removal?.scope === 'category';
+  const removal = planRemoval(state), showLibraryRemoval = removal?.scope === 'category' || (!removal && !!planRemoval(state, true));
   const selectedAssets = state.snapshot.assets.filter(asset => state.selected.has(asset.id));
-  const compatible = state.snapshot.categories.filter(item => !adding || !item.scope || item.scope === 'all' || selectedAssets.every(asset => assetMode(asset) === item.scope));
-  bar.innerHTML = `<div class="selection-title"><span class="selection-check">${icon('check', 14)}</span><strong>已选 ${state.selected.size} 项</strong><button class="text-button" data-action="deselect">取消</button><button class="text-button" data-action="toggle-quick-categories" aria-expanded="${!!state.quickCategories && !adding}" title="移到所选分类，替换原分类">${icon('folder', 13)}选择分类</button><button class="text-button" data-action="toggle-add-categories" aria-expanded="${!!state.quickCategories && adding}" title="保留原分类，让同一素材也出现在其他分类">${icon('plus', 13)}加入其他分类</button>${state.selected.size === 1 ? `<button class="text-button" data-action="toggle-inspector">${icon('info', 13)}详情</button>` : ''}</div><div class="quick-categories" ${state.quickCategories ? '' : 'hidden'}><label class="quick-category-filter">${adding ? '加入到 · 保留原分类' : '移动到 · 替换原分类'}<input id="quick-category-filter" type="search" placeholder="查找分类…" aria-label="查找要归入的分类" value="${e(state.quickCategoryQuery || '')}"></label><div class="quick-category-options">${adding ? '' : '<button class="category-chip" data-action="assign" data-id="">未分类</button>'}${compatible.map(item => `<button class="category-chip" data-action="${adding ? 'add-to-category' : 'assign'}" data-id="${e(item.id)}" data-category-name="${e(categoryPath(state.snapshot.categories, item.id).toLocaleLowerCase())}" ${state.quickCategoryQuery && !categoryPath(state.snapshot.categories, item.id).toLocaleLowerCase().includes(state.quickCategoryQuery.toLocaleLowerCase()) ? 'hidden' : ''}>${e(categoryPath(state.snapshot.categories, item.id))}</button>`).join('')}<button class="category-chip add-category" data-action="create-category" title="新建分类">${icon('plus', 14)}</button></div></div>${scoped ? '<button class="text-button" data-action="remove-library" title="从整个素材库移除，影响所有分类">从素材库移除</button>' : ''}<button class="text-button remove-selected" data-action="remove" title="${e(removal?.title || '当前选择不在这个分类中')}"${removal ? '' : ' disabled'}>${icon('trash', 15)}${e(removal?.buttonLabel || '从当前分类移除')}</button>`;
+  const selectionKey = selectedAssets.map(asset => asset.id).sort().join('\u0000');
+  if (state.quickCategorySelectionKey && state.quickCategorySelectionKey !== selectionKey) state.quickCategoryParentId = null;
+  state.quickCategorySelectionKey = selectionKey;
+  const modes = [...new Set(selectedAssets.map(assetMode))].sort().join(',');
+  if (state.quickCategoryNavigation?.categories !== state.snapshot.categories || state.quickCategoryNavigation?.modes !== modes) {
+    state.quickCategoryNavigation = { categories: state.snapshot.categories, modes,
+      navigation: createCategoryAssignmentNavigation(state.snapshot.categories, modes.split(',')) };
+  }
+  const view = state.quickCategoryNavigation.navigation.browse(state.quickCategoryParentId, state.quickCategoryQuery);
+  state.quickCategoryParentId = view.parentId;
+  const categoryAction = adding ? 'add-to-category' : 'assign';
+  const navigationHtml = `<div class="quick-category-path">${view.parentId ? `<button class="category-chip" data-action="quick-browse-back" data-id="${e(view.backId || '')}">${icon('chevron', 12)}上一级</button>` : ''}<span>${e(view.trail.map(item => item.label).join(' / ') || '顶层分类')}</span>${view.canSelectCurrent ? `<button class="category-chip" data-action="quick-select-current" data-id="${e(view.parentId)}">${adding ? '加入当前分类' : '归入当前分类'}</button>` : ''}</div>`;
+  const optionsHtml = `${adding || view.parentId ? '' : '<button class="category-chip" data-action="assign" data-id="">未分类</button>'}${view.rows.map(item => `<button class="category-chip" data-action="${item.hasChildren || !item.canSelect ? 'quick-browse-category' : categoryAction}" data-id="${e(item.id)}" title="${item.hasChildren ? '打开子分类' : adding ? '加入这个分类' : '归入这个分类'}">${e(item.label)}${item.hasChildren ? icon('chevron', 12) : ''}</button>`).join('')}${view.rows.length ? '' : '<span class="field-hint">没有可用的子分类</span>'}<button class="category-chip add-category" data-action="create-quick-category" data-id="${e(view.parentId || '')}" title="${view.parentId ? '在当前分类下新建子分类' : '新建顶层分类'}">${icon('plus', 14)}</button>`;
+  bar.innerHTML = `<div class="selection-title"><span class="selection-check">${icon('check', 14)}</span><strong>已选 ${state.selected.size} 项</strong><button class="text-button" data-action="deselect">取消</button><button class="text-button" data-action="toggle-quick-categories" aria-expanded="${!!state.quickCategories && !adding}" title="移到所选分类，替换原分类">${icon('folder', 13)}选择分类</button><button class="text-button" data-action="toggle-add-categories" aria-expanded="${!!state.quickCategories && adding}" title="保留原分类，让同一素材也出现在其他分类">${icon('plus', 13)}加入其他分类</button>${selectedAssets.length >= 2 && selectedAssets.every(a => a.kind === 'image') && !state.snapshot.sceneGroups?.some(g => g.assetIds.some(id => state.selected.has(id))) ? '<button class="text-button" data-action="create-scene-group">' + icon('folder',13) + '创建场景组合</button>' : ''}${state.selected.size === 1 ? `<button class="text-button" data-action="zoom-preview" data-id="${e([...state.selected][0])}">${icon('info', 13)}详情</button>` : ''}</div><div class="quick-categories" ${state.quickCategories ? '' : 'hidden'}><label class="quick-category-filter">${adding ? '加入到 · 保留原分类' : '移动到 · 替换原分类'}<input id="quick-category-filter" type="search" placeholder="查找分类…" aria-label="查找要归入的分类" value="${e(state.quickCategoryQuery || '')}"></label>${navigationHtml}<div class="quick-category-options">${optionsHtml}</div></div>${showLibraryRemoval ? '<button class="text-button" data-action="remove-library" title="从整个素材库移除，影响所有分类">从素材库移除</button>' : ''}<button class="text-button remove-selected" data-action="remove" title="${e(removal?.title || '当前选择不在这个分类中')}"${removal ? '' : ' disabled'}>${icon('trash', 15)}${e(removal?.buttonLabel || '从当前分类移除')}</button>`;
+  if (focusedSearch) {
+    const input = bar.querySelector?.('#quick-category-filter');
+    input?.focus({ preventScroll: true });
+    if (focusedSearch.start != null) input?.setSelectionRange(focusedSearch.start, focusedSearch.end);
+  }
   if (focusedAction) Array.from(bar.querySelectorAll('button[data-action]'))
     .find(button => button.dataset.action === focusedAction.action && button.dataset.id === focusedAction.id && !button.disabled)
     ?.focus({ preventScroll: true });
@@ -135,29 +200,8 @@ export function renderSelection(state) {
 
 export function renderInspector(state) {
   const inspector = document.querySelector('#inspector');
-  inspector.hidden = !state.inspectorOpen;
-  document.querySelector('.app-shell').classList.toggle('has-inspector', !!state.inspectorOpen);
-  document.querySelector('#inspector-toggle').setAttribute('aria-pressed', String(!!state.inspectorOpen));
-  document.querySelector('#inspector-toggle').setAttribute('aria-label', state.inspectorOpen ? '隐藏素材详情' : '显示素材详情');
-  if (!state.inspectorOpen) return;
-  const asset = state.snapshot.assets.find(item => item.id === state.detail);
-  if (!asset || !state.selected.has(asset.id)) {
-    delete inspector.dataset.asset;
-    inspector.innerHTML = `<div class="inspector-heading"><h2>素材详情</h2><span>${icon('info', 17)}</span></div><div class="inspector-empty"><div class="detail-glyph">${icon('layers', 30)}</div><h3>让灵感再近一点</h3><p>点击预览，查看素材详情。<br>选好了，就发送到 AN。</p></div><div class="inspector-tip"><span>${icon('spark', 18)}</span><p>善用标签，让下次寻找<br>变成一眼就认出。</p></div>`;
-    return;
-  }
-  if (inspector.dataset.asset === asset.id && inspector.contains(document.activeElement) && document.activeElement.matches('input, select, textarea')) return;
-  inspector.dataset.asset = asset.id;
-  const isAudio = assetMode(asset) === 'audio', statePreview = isAudio ? 'ready' : previewState(asset), connected = !!state.snapshot.bridge?.connected;
-  inspector.innerHTML = `<div class="inspector-heading"><h2>素材详情</h2><button class="icon-button" data-action="toggle-inspector" title="关闭详情" aria-label="关闭详情">${icon('close', 17)}</button></div>
-    <div class="detail-preview ${isAudio ? 'audio-card-preview' : 'checkerboard'}" data-action="${isAudio ? 'play-audio' : 'zoom-preview'}" data-id="${e(asset.id)}">${isAudio ? audioArt() : preview(asset, true)}<span class="format-badge">${e(format(asset))}</span></div>
-    <div class="detail-title"><h3 title="${e(filename(asset))}">${e(filename(asset))}</h3><button class="favorite-button ${asset.favorite ? 'is-favorite' : ''}" data-action="favorite" data-id="${e(asset.id)}" aria-label="${asset.favorite ? '取消收藏' : '收藏'}" aria-pressed="${!!asset.favorite}">${icon('heart', 19)}</button></div>
-    <p class="detail-origin">${isAudio ? `${icon('music', 13)} 本地音频 · 点击试听` : statePreview === 'ready' ? `${icon('check', 13)} ${origin(asset)}` : statePreview === 'error' ? `${icon('alert', 13)} 预览失败` : '<span class="spinner"></span> 正在生成预览'}</p>
-    <div class="detail-fields"><label>素材名称<input id="asset-name" data-field="name" data-id="${e(asset.id)}" value="${e(asset.name)}" maxlength="180" autocomplete="off"></label><label>移动到分类<span class="field-hint">替换已有分类</span><select data-field="category" data-id="${e(asset.id)}"><option value="">未分类</option>${categoryOptions(state.snapshot.categories.filter(item => !item.scope || item.scope === 'all' || item.scope === assetMode(asset)), asset.categoryId)}</select></label><div class="asset-categories"><span class="field-hint">已加入的分类 · 点击 × 仅取消该分类</span><div class="tag-list">${assetCategoryIds(asset).map(id => `<button data-action="remove-from-category" data-id="${e(asset.id)}" data-category-id="${e(id)}" title="从此分类移除，保留素材">${e(categoryPath(state.snapshot.categories, id))} ×</button>`).join('') || '<span class="field-hint">未分类</span>'}</div><button class="text-button" data-action="toggle-add-categories">${icon('plus', 13)}加入其他分类</button></div><label>标签<span class="field-hint">用逗号分隔</span><input data-field="tags" data-id="${e(asset.id)}" value="${e((asset.tags || []).join('，'))}" placeholder="例如：人物，动作，场景" maxlength="400" autocomplete="off"></label>${asset.tags?.length ? `<div class="tag-list">${asset.tags.map(tag => `<button data-action="search-tag" data-tag="${e(tag)}">${e(tag)}</button>`).join('')}</div>` : ''}</div>
-    <dl class="metadata">${isAudio ? `<div><dt>文件格式</dt><dd>${e(format(asset))}</dd></div><div><dt>时长</dt><dd>${formatTime(asset.duration)}</dd></div>` : `<div><dt>画布尺寸</dt><dd>${asset.width && asset.height ? `${Number(asset.width)} × ${Number(asset.height)}` : '—'}</dd></div><div><dt>时间轴</dt><dd>${asset.frames ? `${Number(asset.frames)} 帧` : '—'}</dd></div>`}<div><dt>原始名称</dt><dd title="${e(asset.originalName)}">${e(asset.originalName || filename(asset))}</dd></div></dl>
-    ${asset.previewWarning || asset.animationNote ? `<p class="animation-note">${e(asset.previewWarning || asset.animationNote)}</p>` : ''}
-    ${statePreview === 'error' ? `<div class="preview-error"><p>${e(asset.previewError || '当前文件暂时无法生成预览，可以重试。')}</p><button class="text-button" data-action="retry" data-id="${e(asset.id)}">${icon('refresh', 14)}重新生成预览</button></div>` : ''}
-    <div class="detail-send" data-kind="${isAudio ? 'audio' : 'fla'}">${isAudio ? `${audioButton(asset)}${dragHandle(asset, 'drag-handle detail-drag')}` : `<button class="button primary" data-action="send" data-id="${e(asset.id)}">${icon('arrow', 18)}粘贴到舞台</button><button class="button secondary" data-action="open-animate" data-id="${e(asset.id)}">${icon('file', 16)}用 AN 打开文件</button>`}<button class="text-button" data-action="duplicate-file" data-id="${e(asset.id)}">${icon('copy', 14)}复制并加入素材库</button><button class="text-button" data-action="reveal-file" data-id="${e(asset.id)}">${icon('folder', 14)}在文件夹中显示</button><p>${isAudio ? '拖入剪映或 AN 导入音频' : connected ? '在 AN 面板点击「粘贴到舞台」' : 'AN 未连接 · 发送后会保留待处理'}</p></div>`;
+  if (inspector) { inspector.hidden = true; inspector.innerHTML = ''; }
+  document.querySelector('.app-shell').classList.remove('has-inspector');
 }
 
 export function renderStatus(state) {
@@ -179,6 +223,8 @@ export function renderStatus(state) {
   const detailConnection = document.querySelector('.detail-send[data-kind="fla"] p');
   if (detailConnection) detailConnection.textContent = connected ? '在 AN 面板点击「粘贴到舞台」' : 'AN 未连接 · 发送后会保留待处理';
   document.querySelector('#connection').classList.toggle('connected', connected);
+  document.querySelector('#connection').setAttribute('aria-label', connected ? 'AN 已连接，查看连接设置' : 'AN 未连接，查看连接设置');
+  document.querySelector('#connection').title = connected ? 'AN 已连接 · 查看连接设置' : 'AN 未连接 · 查看连接设置';
   document.querySelector('#connection').innerHTML = `<span class="status-dot"></span><span>${connected ? 'AN 已连接' : 'AN 未连接'}</span>`;
   document.querySelector('#sidebar-bridge').textContent = connected ? '已连接 · 可以接收素材' : '打开 AN 面板即可接收';
   const status = document.querySelector('#queue-status');

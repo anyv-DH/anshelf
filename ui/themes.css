@@ -1,0 +1,246 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+/* The original dark and warm palettes remain in style.css and brand.css. */
+:root[data-theme="paper"] {
+  --bg: #f4f5f7;
+  --sidebar: #e9edf2;
+  --surface: #ffffff;
+  --surface-2: #e9edf2;
+  --surface-3: #dfe5ec;
+  --ink: #223044;
+  --muted: #4b596d;
+  --faint: #536276;
+  --line: #c6ced8;
+  --violet: #365d88;
+  --accent: #365d88;
+  --accent-ink: #ffffff;
+  --accent-soft: #e1eaf4;
+  --green: #2e6750;
+  --danger: #a44044;
+  --hover: #dde6ef;
+  --checker: #f1f3f6;
+  --checker-line: #dfe5ec;
+  --shadow: #21344b24;
+  --brand-start: #365d88;
+  --brand-end: #486175;
+  --success-soft: #e1eee5;
+  --error-soft: #f7e8e8;
+  --scrollbar: #8b99ac;
+  --scrollbar-hover: #65768b;
+  color-scheme: light;
+}
+
+:root[data-theme="slate"] {
+  --bg: #191f27;
+  --sidebar: #202832;
+  --surface: #252e39;
+  --surface-2: #303b48;
+  --surface-3: #384654;
+  --ink: #f1f5f9;
+  --muted: #c0ccda;
+  --faint: #a9b8c9;
+  --line: #526273;
+  --violet: #a8c9ed;
+  --accent: #a8c9ed;
+  --accent-ink: #1f2c3c;
+  --accent-soft: #33495f;
+  --green: #a4ceb4;
+  --danger: #f0b3b3;
+  --hover: #344253;
+  --checker: #1f2833;
+  --checker-line: #303b48;
+  --shadow: #080d1659;
+  --brand-start: #b7cee8;
+  --brand-end: #b2c9cf;
+  --success-soft: #2e443c;
+  --error-soft: #4b333b;
+  --scrollbar: #73869b;
+  --scrollbar-hover: #9aadc2;
+  color-scheme: dark;
+}
+
+:root[data-theme="sage"] {
+  --bg: #f0f4f1;
+  --sidebar: #e4ece7;
+  --surface: #fbfdfb;
+  --surface-2: #e3ece7;
+  --surface-3: #d6e3db;
+  --ink: #283e34;
+  --muted: #4c6256;
+  --faint: #50675a;
+  --line: #bacbc0;
+  --violet: #37684f;
+  --accent: #37684f;
+  --accent-ink: #ffffff;
+  --accent-soft: #d9e8de;
+  --green: #2c6650;
+  --danger: #a04448;
+  --hover: #d7e5dc;
+  --checker: #edf3ef;
+  --checker-line: #d9e4de;
+  --shadow: #1d3b2924;
+  --brand-start: #37684f;
+  --brand-end: #48645b;
+  --success-soft: #deece4;
+  --error-soft: #f7e8e8;
+  --scrollbar: #859d8e;
+  --scrollbar-hover: #5d7b69;
+  color-scheme: light;
+}
+
+:root[data-theme="bluewhite"] {
+  --bg: #ffffff;
+  --sidebar: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #edf1f6;
+  --ink: #263244;
+  --muted: #5b6573;
+  --faint: #626d7b;
+  --line: #dfe7f2;
+  --violet: #1769b1;
+  --accent: #1673ce;
+  --accent-ink: #ffffff;
+  --accent-soft: #eaf4ff;
+  --reference-blue: #409eff;
+  --green: #2d7147;
+  --danger: #b23b43;
+  --hover: #f0f7ff;
+  --checker: #ffffff;
+  --checker-line: #f1f4f8;
+  --shadow: #2a51831c;
+  --brand-start: #1673ce;
+  --brand-end: #409eff;
+  --success-soft: #eaf5ec;
+  --error-soft: #fff0f0;
+  --scrollbar: #bac8d8;
+  --scrollbar-hover: #879db8;
+  color-scheme: light;
+}
+
+/* These scoped corrections give every new palette the same semantic states. */
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .connection-pill {
+  border-color: var(--line);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .connection-pill.connected {
+  color: var(--green);
+  background: var(--success-soft);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.host-error, .preview-error, .bridge-status.transfer-error) {
+  color: var(--danger);
+  border-color: var(--line);
+  background: var(--error-soft);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.queue-status, .bridge-status) {
+  color: var(--muted);
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .bridge-status strong {
+  color: var(--ink);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .bridge-status.transfer-error strong {
+  color: var(--danger);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.preview-origin.pending, .favorite-button) {
+  color: var(--muted);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.favorite-button.is-favorite, .favorite-button:hover, .folder-color, .detail-glyph) {
+  color: var(--violet);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .favorite-button.is-favorite svg {
+  fill: var(--accent-soft);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.folder-color.color-1, .folder-color.color-4) {
+  color: var(--faint);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .folder-color.color-2 {
+  color: var(--green);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .bridge-mark {
+  color: var(--violet);
+  background: var(--accent-soft);
+  border-color: var(--line);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .status-dot {
+  background: var(--faint);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.local-note .status-dot, .connection-pill.connected .status-dot) {
+  background: var(--green);
+  box-shadow: none;
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .primary {
+  box-shadow: none;
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.selection-bar, .preview-option, .fake-checkbox) {
+  border-color: var(--line);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.search:focus-within, .detail-fields input:focus, .detail-fields select:focus, .asset-card:hover, .category-chip:hover) {
+  border-color: var(--violet);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .spinner {
+  border-color: var(--line);
+  border-top-color: var(--violet);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.nav-item small, .subcategory-folder.is-current small) {
+  opacity: 1;
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .subcategory-folder.is-current svg {
+  color: var(--accent-ink);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(input, textarea)::placeholder {
+  color: var(--faint);
+  opacity: 1;
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .art-card.front {
+  background: var(--surface-3);
+  box-shadow: 0 15px 60px var(--shadow);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .art-orbit {
+  border-color: var(--violet);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) .art-moon {
+  background: var(--accent);
+  box-shadow: none;
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) :is(.art-star, .art-label, .art-spark, .spark-two) {
+  color: var(--faint);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]),
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) * {
+  scrollbar-color: var(--scrollbar) transparent;
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) *::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar);
+}
+:root:is([data-theme="paper"], [data-theme="slate"], [data-theme="sage"], [data-theme="bluewhite"]) *::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-hover);
+}
+
+/* Reference-inspired colors only; navigation geometry stays shared with the layout. */
+:root[data-theme="bluewhite"] .library-toolbar .subcategory-bar {
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+:root[data-theme="bluewhite"] .library-toolbar .subcategory-folder.is-current {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+:root[data-layout="modern"][data-theme="bluewhite"] #navigation .nav-item.active {
+  color: var(--violet);
+  background: var(--surface);
+  box-shadow: inset 0 -2px 0 var(--reference-blue);
+}
+:root[data-layout="modern"][data-theme="bluewhite"] #navigation .nav-item.active small {
+  color: currentColor;
+  background: var(--accent-soft);
+}
+:root[data-theme="bluewhite"] .asset-card {
+  border-color: var(--line);
+  box-shadow: none;
+}
+:root[data-theme="bluewhite"] .asset-card.selected {
+  border-color: var(--reference-blue);
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}

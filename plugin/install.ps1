@@ -96,7 +96,7 @@ Assert-NoReparsePoint $extensionBase
 Assert-SafeTree $target
 if ((Test-Path -LiteralPath $target) -and -not (Test-Path -LiteralPath $target -PathType Container)) { throw 'Existing CEP installation is not a directory.' }
 
-$files = @('index.html','style.css','icon.png','panel.js','queue.cjs','insert-whole.jsfl','README.md','CSXS/manifest.xml')
+$files = @('index.html','import-settings.html','style.css','icon.png','panel.js','queue.cjs','insert-whole.jsfl','README.md','CSXS/manifest.xml')
 foreach ($file in $files) {
     Assert-RegularFile (Join-Path $sourceRoot $file)
 }

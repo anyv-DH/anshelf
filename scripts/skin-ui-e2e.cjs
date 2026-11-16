@@ -24,7 +24,15 @@ async function main() {
     app = await _electron.launch({ executablePath, args: [...(process.env.ANSHELF_UI_EXECUTABLE ? [] : [root]), '--user-data-dir=' + profile], env: { ...process.env, ANSHELF_DATA_DIR: data }, timeout: 60000 });
     page = await app.firstWindow();
     page.on('pageerror', error => errors.push(error.message));
-    await page.waitForSelector('[data-action="skin-settings"]');
+    await page.waitForSelector('[data-action="skin-settings"]', { state: 'attached' });
+    await page.waitForSelector('#skin-dialog', { state: 'attached' });
+  }
+  async function openSkin() {
+    const modern = await page.evaluate(() => document.documentElement.dataset.layout === 'modern');
+    if (modern && await page.locator('[data-top-more]').getAttribute('aria-expanded') !== 'true') {
+      await page.locator('[data-top-more]').click();
+    }
+    await page.locator('[data-action="skin-settings"]').click();
   }
   async function choose(file) {
     await app.evaluate(({ dialog }, selected) => { dialog.showOpenDialog = async () => ({ canceled: !selected, filePaths: selected ? [selected] : [] }); }, file);
@@ -34,7 +42,7 @@ async function main() {
   }
   try {
     await launch();
-    await page.locator('[data-action="skin-settings"]').click();
+    await openSkin();
     assert.equal(await page.locator('#skin-dialog').isVisible(), true);
     const first = await choose(image);
     await page.waitForFunction(() => document.querySelector('#skin-background img')?.naturalWidth === 640);
@@ -52,7 +60,7 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('#skin-background img')?.naturalWidth === 640);
     const reopened = await page.evaluate(() => window.shelf.getSkin());
     assert.equal(reopened.opacity, .7); assert.equal(reopened.revision, first.revision);
-    await page.locator('[data-action="skin-settings"]').click();
+    await openSkin();
     checks.push('reopening the app restores image and opacity from the same tiny settings file');
 
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -66,7 +74,7 @@ async function main() {
     await page.waitForFunction(() => !document.querySelector('#skin-background img')?.hasAttribute('src'), undefined, { polling: 100 });
     await app.evaluate(({ BrowserWindow }) => { const win = BrowserWindow.getAllWindows().find(w => !w.webContents.isDestroyed()); win.restore(); win.show(); win.focus(); });
     await page.waitForFunction(() => document.querySelector('#skin-background img')?.naturalWidth === 320);
-    await page.locator('[data-action="skin-settings"]').click();
+    await openSkin();
     checks.push('actual window minimization unloads GIF and restoration resumes playback');
 
     await page.emulateMedia({ reducedMotion: 'no-preference' });

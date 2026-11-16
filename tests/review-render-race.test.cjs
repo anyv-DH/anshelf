@@ -67,7 +67,9 @@ for (const outcome of ['success', 'failure']) {
       assert.equal(asset.previewPath, imported.assets[0].previewPath);
       assert.equal(asset.previewRevision, imported.assets[0].previewRevision);
       assert.equal(asset.previewError, null);
+      if(outcome==='success')assert.ok(host.library.state.retiredPreviews.some(item=>item.path==='previews/older.png'),'commit rejected behind mutation retires unused render output');
     } finally {
+      host.close();
       finishRender.resolve();
       finishMutation.resolve();
       await host.queue.idle();

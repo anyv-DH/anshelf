@@ -2,6 +2,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { resolveManagedPath } = require('./bridge.cjs');
 const { sha256 } = require('./files.cjs');
 
@@ -95,4 +96,55 @@ async function locateManagedFile(root, asset) {
   return location(root, checked, true);
 }
 
-module.exports = { locateManagedFile };
+// Only the user's explicit preview retry may consult recorded originals.
+// Ordinary lookups remain confined to this asset's managed directory.
+async function restoreManagedFileForRetry(root, asset) {
+  try { return { ...await locateManagedFile(root, asset), restored: false }; }
+  catch (error) { if (error.message !== '素材路径对应的文件不存在') throw error; }
+  validateRecoveryPath(asset);
+  if (!/^[a-f0-9]{64}$/.test(asset.hash)) throw new Error('素材校验信息无效，无法恢复');
+  const assetsDirectory = path.join(root, 'assets');
+  rejectAncestorLinks(assetsDirectory);
+  if (!(await fs.promises.lstat(assetsDirectory)).isDirectory()) throw new Error('素材库文件夹无效');
+  const destination = path.resolve(root, asset.managedPath);
+  rejectAncestorLinks(destination);
+  for (const original of (asset.sourcePaths || []).slice(0, MAX_CANDIDATES)) {
+    const temporary = path.join(assetsDirectory, `${randomUUID()}.retry.tmp`);
+    try {
+      let restored = true;
+      try {
+        if (typeof original !== 'string' || !path.isAbsolute(original) || path.extname(original).toLowerCase() !== '.fla') continue;
+        rejectAncestorLinks(original);
+        const stat = await fs.promises.lstat(original);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128 * 1024 * 1024) continue;
+        await fs.promises.copyFile(original, temporary, fs.constants.COPYFILE_EXCL);
+        if (await sha256(temporary) !== asset.hash) continue;
+      } catch { continue; }
+      rejectAncestorLinks(destination);
+      await fs.promises.mkdir(path.dirname(destination), { recursive: true });
+      rejectAncestorLinks(destination);
+      try {
+        // Publish complete verified bytes atomically, without replacing a file
+        // created in the meantime. The temporary is a copy, never the original.
+        await fs.promises.link(temporary, destination);
+      } catch (error) {
+        if (error.code === 'EEXIST') restored = false;
+        else if (['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV'].includes(error.code)) {
+          // exFAT and some network volumes do not support hard links. Keep
+          // exclusive creation and verify the completed destination instead.
+          try {
+            await fs.promises.copyFile(temporary, destination, fs.constants.COPYFILE_EXCL);
+            if (await sha256(destination) !== asset.hash) {
+              await fs.promises.rm(destination, { force: true });
+              throw new Error('恢复副本校验失败，请重新导入原文件');
+            }
+          } catch (copyError) { if (copyError.code === 'EEXIST') restored = false; else throw copyError; }
+        } else throw error;
+      }
+      return { ...await locateManagedFile(root, asset), restored };
+    } finally { await fs.promises.rm(temporary, { force: true }); }
+  }
+  throw new Error('素材库文件缺失，未找到与登记内容一致的原始文件；请重新选择原文件导入');
+}
+
+module.exports = { locateManagedFile, restoreManagedFileForRetry };

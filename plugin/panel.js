@@ -8,21 +8,36 @@
     var importOrdinary = document.getElementById('import-ordinary'), importEffect = document.getElementById('import-effect');
     var previewResolution = document.getElementById('preview-resolution'), preferExistingPreview = document.getElementById('prefer-existing-preview'), settingsError = document.getElementById('settings-error');
     var categoryOptions = document.getElementById('category-options'), resolutionOptions = document.getElementById('resolution-options'), openImportMenu = null;
-    var queue, path, localURI, extension, api = window.__adobe_cep__;
+    var queue, path, localURI, extension, crypto, normalizeImportOptions, api = window.__adobe_cep__;
+    var settingsWindow = !!document.getElementById('settings-window'), dialogFinished = false;
+    var settingsExtension = 'com.anshelf.receiver.import-settings', panelExtension = 'com.anshelf.receiver.panel';
+    var settingsRequestEvent = settingsExtension + '.request', settingsResponseEvent = settingsExtension + '.response';
     var current = null, busy = false, dropping = false, connected = false, timer = null, lastCompleted = null, lastResult = null;
-    var documentId = null, contextKnown = false, probing = false, unloaded = false;
-    var adding = false, addRequest = null, addStarted = 0, addGeneration = 0;
-    var confirmation = null, confirmTimer = null;
+    var documentId = null, contextKnown = false, probing = false, probeStarted = 0, probeGeneration = 0, unloaded = false;
+    var adding = false, addRequest = null, addStarted = 0, addGeneration = 0, addPhase = null;
+    var confirmation = null;
+
+    function dispatchSettings(type, sender, data) {
+        api.dispatchEvent({ type: type, scope: 'APPLICATION', appId: 'FLPR', extensionId: sender, data: JSON.stringify(data) });
+    }
+
+    function settingsPayload(value) {
+        // CEP 6.1+ parses JSON event data natively; older hosts return text.
+        if (typeof value === 'string') {
+            if (value.length > 16384) return null;
+            value = JSON.parse(value);
+        }
+        if (!value || typeof value !== 'object' || Array.isArray(value) || JSON.stringify(value).length > 16384) return null;
+        return value;
+    }
 
     function closeConfirmation() {
         closeImportMenus(false);
-        if (confirmTimer) window.clearTimeout(confirmTimer);
-        confirmTimer = null;
         if (addDialog) addDialog.hidden = true;
         var previous = confirmation;
         confirmation = null;
-        if (previous && previous.resized) {
-            try { api.resizeContent(previous.width, previous.height); } catch (error) { /* AN owns docking geometry. */ }
+        if (previous && !settingsWindow) {
+            try { dispatchSettings(settingsRequestEvent, panelExtension, { action: 'close', requestId: previous.requestId }); } catch (error) { /* Closing a panel must not save a document. */ }
         }
     }
 
@@ -70,34 +85,33 @@
         Array.prototype.forEach.call(resolutionOptions.querySelectorAll('[role="option"]'), function (option) { option.setAttribute('aria-selected', String(option.getAttribute('data-value') === previewResolution.value)); });
     }
 
-    function categoryScope(category, categories) {
+    function categoryScope(category, byId) {
         var seen = Object.create(null), cursor = category;
         while (cursor && !seen[cursor.id]) {
             seen[cursor.id] = true;
             if (cursor.scope && cursor.scope !== 'all') return cursor.scope;
-            cursor = categories.filter(function (item) { return item.id === cursor.parentId; })[0];
+            cursor = typeof cursor.parentId === 'string' ? byId[cursor.parentId] : null;
         }
         return 'all';
     }
 
-    function categoryLabel(category, categories) {
+    function categoryLabel(category, byId) {
         var seen = Object.create(null), names = [], cursor = category;
         while (cursor && !seen[cursor.id]) {
             seen[cursor.id] = true;
             names.unshift(cursor.name);
-            cursor = categories.filter(function (item) { return item.id === cursor.parentId; })[0];
+            cursor = typeof cursor.parentId === 'string' ? byId[cursor.parentId] : null;
         }
         return names.join(' / ');
     }
 
     function renderImportCategories() {
         if (!confirmation || !confirmation.settings) return;
-        var settings = confirmation.settings, mode = settings.mode, categories = confirmation.categories;
-        var compatible = categories.filter(function (category) { var scope = categoryScope(category, categories); return scope === 'all' || scope === mode; });
+        var settings = confirmation.settings, mode = settings.mode;
+        var compatible = confirmation.categoryChoices.filter(function (category) { return category.scope === 'all' || category.scope === mode; });
         if (!compatible.some(function (category) { return category.id === settings.categoryId; })) settings.categoryId = null;
         var search = String(categorySearch.value || '').trim().toLowerCase();
-        var choices = compatible.map(function (category) { return { id: category.id, label: categoryLabel(category, categories) }; });
-        choices = choices.filter(function (category) { return category.id === settings.categoryId || category.label.toLowerCase().indexOf(search) >= 0; });
+        var choices = compatible.filter(function (category) { return category.id === settings.categoryId || category.searchLabel.indexOf(search) >= 0; });
         choices.sort(function (a, b) { return a.label.localeCompare(b.label); });
         categoryOptions.innerHTML = '<button type="button" role="option" data-value="" aria-selected="' + String(!settings.categoryId) + '">不指定分类（已有分类保留）</button>' + choices.map(function (category) { return '<button type="button" role="option" data-value="' + escaped(category.id) + '" aria-selected="' + String(category.id === settings.categoryId) + '">' + escaped(category.label) + '</button>'; }).join('') + (search && !choices.length ? '<p class="no-options">没有匹配的分类，请试试其他名称</p>' : '');
         importCategory.value = settings.categoryId || '';
@@ -108,10 +122,18 @@
     }
 
     function populateImportSettings(info) {
-        var choices = queue.documentImportSettings(info.file);
+        var choices = queue.documentImportSettings(info.file, function () { return window.localStorage; });
         if (!choices || !Array.isArray(choices.categories) || !choices.defaults) throw new Error('无法读取分类设置，请先更新并打开素材管理器');
         confirmation.categories = choices.categories;
+        // Resolve ancestry once for this snapshot; typing only filters cached labels.
+        var byId = Object.create(null);
+        choices.categories.forEach(function (category) { if (!byId[category.id]) byId[category.id] = category; });
+        confirmation.categoryChoices = choices.categories.map(function (category) {
+            var label = categoryLabel(category, byId);
+            return { id: category.id, label: label, searchLabel: label.toLowerCase(), scope: categoryScope(category, byId) };
+        });
         confirmation.settings = { mode: choices.defaults.mode === 'effect' ? 'effect' : 'ordinary', categoryId: choices.defaults.categoryId || null };
+        confirmation.preferences = choices.preferences;
         currentFile.textContent = info.name + (info.file ? '' : ' · 未保存，确认后先保存');
         currentFile.title = info.file || '未保存的 AN 文档';
         categorySearch.value = '';
@@ -123,40 +145,79 @@
 
     function selectedImportOptions() {
         var mode = confirmation.settings.mode, categoryId = importCategory.value || null;
-        if (categoryId && !confirmation.categories.some(function (category) { var scope = categoryScope(category, confirmation.categories); return category.id === categoryId && (scope === 'all' || scope === mode); })) throw new Error('所选分类不适合当前素材类型，请重新选择');
+        if (categoryId && !confirmation.categoryChoices.some(function (category) { return category.id === categoryId && (category.scope === 'all' || category.scope === mode); })) throw new Error('所选分类不适合当前素材类型，请重新选择');
         var resolution = previewResolution.value ? Number(previewResolution.value) : null;
         if (resolution !== null && [256, 512, 1024, 2048].indexOf(resolution) < 0) throw new Error('请选择有效的预览分辨率');
         return { mode: mode, categoryId: categoryId, previewResolution: resolution, preferExistingPreview: !!preferExistingPreview.checked };
     }
 
     function confirmCurrentDocument(generation, info) {
-        if (!addDialog || !confirmSave || !confirmCancel || !currentFile || !categorySearch || !importCategory || !categoryOptions || !resolutionOptions || !importOrdinary || !importEffect || !previewResolution || !preferExistingPreview || !settingsError || documentId === null) return false;
-        var width = Number(window.innerWidth), height = Number(window.innerHeight);
-        if (!(width > 0 && height > 0)) return false;
-        if ((width < 340 || height < 400) && typeof api.resizeContent !== 'function') return false;
-        confirmation = { generation: generation, documentId: documentId, width: width, height: height, resized: false };
-        function show() {
-            if (unloaded || !adding || generation !== addGeneration || !confirmation) return;
-            if (window.innerWidth < 340 || window.innerHeight < 400) {
-                // Some docked AN panels cannot resize. Keep their native
-                // confirmation, never an unreadable dialog in a 48px column.
-                closeConfirmation();
-                saveCurrentDocument(generation, null);
+        if (!api.requestOpenExtension || !api.addEventListener || !api.dispatchEvent) throw new Error('无法打开独立导入设置，请更新插件并重新打开面板');
+        confirmation = { generation: generation, documentId: info.documentId, info: info, requestId: crypto.randomBytes(16).toString('hex') };
+        addPhase = 'open-settings';
+        addStarted = new Date().getTime();
+        try {
+            api.requestOpenExtension(settingsExtension, '');
+            // A previously loaded Modeless window is only activated by CEP.
+            // Ask it to repeat the handshake without an idle polling timer.
+            dispatchSettings(settingsRequestEvent, panelExtension, { action: 'ping' });
+        }
+        catch (error) { throw new Error('无法打开独立导入设置，请重新打开面板：' + String(error.message || error)); }
+    }
+
+    function settingsResponse(event) {
+        if (unloaded || !adding || !confirmation || event.extensionId !== settingsExtension) return;
+        try {
+            var result = settingsPayload(event.data), active = confirmation;
+            if (!result) return;
+            if (result.action === 'ready') {
+                if (addPhase !== 'open-settings') return;
+                dispatchSettings(settingsRequestEvent, panelExtension, { action: 'show', requestId: active.requestId, documentId: active.documentId, info: active.info });
                 return;
             }
-            try {
-                populateImportSettings(info);
-                addDialog.hidden = false;
-                confirmCancel.focus();
-            } catch (error) { finishAdd({ ok: false, error: String(error.message || error) }); }
+            if (result.requestId !== active.requestId) return;
+            if (result.action === 'opened') { addPhase = 'confirm'; return; }
+            if (result.action === 'cancel') { finishAdd({ ok: false, cancelled: true }); return; }
+            if (result.action === 'error') { finishAdd({ ok: false, error: String(result.error || '独立导入设置未能打开') }); return; }
+            if (result.action !== 'confirm' || addPhase !== 'confirm') return;
+            var options = normalizeImportOptions(result.options);
+            if (!options || !options.mode || !Object.prototype.hasOwnProperty.call(options, 'previewResolution') || typeof options.preferExistingPreview !== 'boolean') throw new Error('导入设置不完整，请重新打开设置');
+            closeConfirmation();
+            saveCurrentDocument(active.generation, active.documentId, options);
+        } catch (error) { finishAdd({ ok: false, error: String(error.message || error) }); }
+    }
+
+    function finishSettings(result) {
+        if (dialogFinished) return;
+        dialogFinished = true;
+        var active = confirmation;
+        if (active) {
+            result.requestId = active.requestId;
+            try { dispatchSettings(settingsResponseEvent, settingsExtension, result); } catch (error) { /* A closed parent cannot save. */ }
         }
-        if (width < 340 || height < 400) {
-            confirmation.resized = true;
-            try { api.resizeContent(380, 440); }
-            catch (error) { closeConfirmation(); return false; }
-            confirmTimer = window.setTimeout(show, 120);
-        } else show();
-        return true;
+        closeConfirmation();
+        try { api.closeExtension(); } catch (error) { /* Unload cancellation is still reported above. */ }
+    }
+
+    function settingsRequest(event) {
+        if (unloaded || dialogFinished || event.extensionId !== panelExtension) return;
+        try {
+            var request = settingsPayload(event.data);
+            if (!request) return;
+            if (request.action === 'ping') { dispatchSettings(settingsResponseEvent, settingsExtension, { action: 'ready' }); return; }
+            if (request.action === 'close') {
+                if (/^[a-f0-9]{32}$/.test(request.requestId || '') && (!confirmation || request.requestId === confirmation.requestId)) { dialogFinished = true; closeConfirmation(); api.closeExtension(); }
+                return;
+            }
+            if (request.action !== 'show' || !/^[a-f0-9]{32}$/.test(request.requestId || '') || typeof request.documentId !== 'number' || request.documentId < 0 || Math.floor(request.documentId) !== request.documentId || !request.info || request.info.documentId !== request.documentId || typeof request.info.name !== 'string') return;
+            confirmation = { requestId: request.requestId, documentId: request.documentId };
+            populateImportSettings(request.info);
+            addDialog.hidden = false;
+            var loading = document.getElementById('settings-loading');
+            if (loading) loading.hidden = true;
+            confirmCancel.focus();
+            dispatchSettings(settingsResponseEvent, settingsExtension, { action: 'opened', requestId: request.requestId });
+        } catch (error) { finishSettings({ action: 'error', error: String(error.message || error) }); }
     }
 
     function setAddButton(text, state, description, disabled) {
@@ -175,6 +236,7 @@
         }
         addRequest = null;
         adding = false;
+        addPhase = null;
         addGeneration++;
         var description = result.cancelled ? '已取消加入，未添加或更新素材。' : result.ok ? '素材：' + (result.name || '当前文档') + '。已加入安安素材管理器；预览在后台生成，可回管理器分类。' : String(result.error || '加入未完成');
         setAddButton(result.cancelled ? '已取消' : result.ok ? '已加入 ✓' : '加入失败', result.cancelled ? 'ready' : result.ok ? 'success' : 'error', description, false);
@@ -185,22 +247,26 @@
     function addCurrentDocument() {
         if (!addCurrent || adding || busy || !connected || unloaded) return;
         adding = true;
+        addPhase = 'inspect';
         addStarted = new Date().getTime();
         var generation = ++addGeneration;
-        setAddButton('等待确认…', 'busy', '请在 AN 中确认是否保存并加入素材库；取消不会保存或加入。', true);
+        setAddButton('正在读取…', 'busy', '正在读取当前 AN 文档，请稍候；此时尚未保存或导入。', true);
         insert.disabled = true;
         heartbeat();
         try {
             var scriptURI = localURI(path.join(extension, 'insert-whole.jsfl'));
             var code = '(function(){try{return fl.runScript(' + JSON.stringify(scriptURI) + ',"AnShelfCurrentDocumentInfoForLibrary");}catch(e){return "{\\"version\\":1,\\"ok\\":false,\\"error\\":\\"无法读取当前AN文档\\"}";}})();';
             api.evalScript(code, function (response) {
-                if (unloaded || !adding || generation !== addGeneration) return;
+                if (unloaded || !adding || generation !== addGeneration || addPhase !== 'inspect') return;
                 try {
+                    if (!response || response === 'EvalScript error.') throw new Error('AN 未能读取当前文档，请关闭 AN 中的弹窗后重试，或重新打开面板');
                     var info = JSON.parse(response);
                     if (!info || info.version !== 1 || info.ok !== true) throw new Error(info && info.error || 'AN 返回的当前文档信息无效');
                     if (typeof info.documentId !== 'number' || !isFinite(info.documentId) || info.documentId < 0 || info.documentId > 9007199254740991 || Math.floor(info.documentId) !== info.documentId || typeof info.name !== 'string') throw new Error('无法确认当前 AN 文档，请重新打开面板');
                     documentId = info.documentId;
-                    if (!confirmCurrentDocument(generation, info)) saveCurrentDocument(generation, null);
+                    addPhase = 'confirm';
+                    setAddButton('等待确认…', 'busy', '请确认导入设置；取消不会保存或加入。', true);
+                    confirmCurrentDocument(generation, info);
                 } catch (error) { finishAdd({ ok: false, error: String(error.message || error) }); }
             });
         } catch (error) { finishAdd({ ok: false, error: String(error.message || error) }); }
@@ -208,18 +274,20 @@
 
     function saveCurrentDocument(generation, confirmedDocumentId, options) {
         if (unloaded || !adding || generation !== addGeneration) return;
+        addPhase = 'save';
         setAddButton(confirmedDocumentId === null ? '等待确认…' : '正在保存…', 'busy', '保存当前 AN 文档；取消保存就取消加入。', true);
         try {
             var scriptURI = localURI(path.join(extension, 'insert-whole.jsfl'));
             var confirmed = confirmedDocumentId === null ? '' : ',' + JSON.stringify(String(confirmedDocumentId));
             var code = '(function(){try{return fl.runScript(' + JSON.stringify(scriptURI) + ',"AnShelfCurrentDocumentForLibrary"' + confirmed + ');}catch(e){return "{\\"version\\":1,\\"ok\\":false,\\"error\\":\\"无法读取当前AN文档\\"}";}})();';
             api.evalScript(code, function (response) {
-                if (unloaded || !adding || generation !== addGeneration) return;
+                if (unloaded || !adding || generation !== addGeneration || addPhase !== 'save') return;
                 try {
                     var result = JSON.parse(response);
                     if (!result || result.version !== 1 || typeof result.ok !== 'boolean') throw new Error('AN 返回的当前文档信息无效');
                     if (!result.ok) { finishAdd(result); return; }
                     addRequest = queue.requestDocumentImport(result.file, options);
+                    addPhase = 'receipt';
                     // The timeout begins after the user finishes Animate's native Save dialog.
                     addStarted = new Date().getTime();
                     setAddButton('正在加入…', 'busy', '请保持安安素材管理器开启；正在加入：' + (result.name || '当前文档'), true);
@@ -229,7 +297,18 @@
     }
 
     function checkDocumentImport() {
-        if (!adding || !addRequest) return;
+        if (!adding) return;
+        if (addPhase === 'inspect' && new Date().getTime() - addStarted >= 10000) {
+            finishAdd({ ok: false, error: 'AN 未及时响应文档读取，请关闭 AN 中的弹窗后重试；仍无响应时请重新打开面板。当前操作未保存或提交素材。' });
+            return;
+        }
+        if (addPhase === 'open-settings' && new Date().getTime() - addStarted >= 10000) {
+            finishAdd({ ok: false, error: '独立导入设置未能打开，请更新插件并重新打开面板后重试。当前操作未保存或提交素材。' });
+            return;
+        }
+        // Native confirmation and Save As belong to the user, so never time
+        // them out or repeat a save while their callback is still pending.
+        if (!addRequest) return;
         try {
             var result = queue.documentImportResult(addRequest.requestId);
             if (result) { finishAdd(result); return; }
@@ -257,14 +336,21 @@
         if (!api || !api.evalScript || !api.getSystemPath) throw new Error('CEP 环境不可用');
         var nodeRequire = window.cep_node && window.cep_node.require ? window.cep_node.require : require;
         path = nodeRequire('path');
+        crypto = nodeRequire('crypto');
         extension = decodeURI(api.getSystemPath('extension').replace(/^file:\/\//, ''));
         if (extension.charAt(0) === '/' && /^[A-Za-z]:/.test(extension.substring(1))) extension = extension.substring(1);
         var receiver = nodeRequire(path.join(extension, 'queue.cjs'));
         localURI = receiver.localURI;
+        normalizeImportOptions = receiver.documentImportOptions;
         var appData = nodeRequire('process').env.APPDATA;
         if (!appData) throw new Error('无法定位 Windows AppData');
         queue = new receiver.Queue(path.join(appData, 'AnShelf'));
     } catch (error) {
+        if (settingsWindow) {
+            var loading = document.getElementById('settings-loading');
+            if (loading) loading.textContent = '设置无法打开：' + String(error.message || error) + '。请更新插件并重新打开面板。';
+            return;
+        }
         setButton('连接失败', 'error', String(error.message || error) + '。请检查 Animate 的 CEP 面板安装配置。', true);
         setAddButton('连接失败', 'error', String(error.message || error), true);
         return;
@@ -286,18 +372,22 @@
     }
 
     function refreshContext() {
-        if (unloaded || probing) return;
+        if (unloaded) return;
         if (adding) { checkDocumentImport(); if (adding) { heartbeat(); return; } }
+        if (probing && new Date().getTime() - probeStarted < 10000) return;
         // An insertion temporarily activates its source document. Preserve the
         // target identity and publish busy until that operation has completed.
         if (busy) { heartbeat(); return; }
         probing = true;
+        probeStarted = new Date().getTime();
+        var generation = ++probeGeneration;
         var code = '(function(){try{var d=fl.getDocumentDOM();return d&&typeof d.id==="number"&&isFinite(d.id)&&d.id>=0&&Math.floor(d.id)===d.id?String(d.id):"null";}catch(e){return "null";}})();';
         try {
             api.evalScript(code, function (response) {
+                if (generation !== probeGeneration) return;
                 probing = false;
                 if (unloaded) return;
-                if (busy) { heartbeat(); return; }
+                if (busy || adding) { heartbeat(); return; }
                 var id = response === 'null' ? null : Number(response);
                 documentId = typeof response === 'string' && /^(0|[1-9][0-9]*)$/.test(response) && id <= 9007199254740991 ? id : null;
                 contextKnown = true;
@@ -330,13 +420,14 @@
             current = pending;
             lastCompleted = null;
             lastResult = null;
-            if (pending.delivery === 'stage-drop') {
+            if (pending.delivery === 'stage-drop' || pending.delivery === 'image-import') {
                 if (!contextKnown) {
-                    setButton('等待 AN 文档…', 'waiting', '正在确认拖拽时所在的 AN 文档。', true);
+                    setButton('等待 AN 文档…', 'waiting', '正在确认素材接收的 AN 文档。', true);
                     return;
                 }
                 var now = new Date().getTime();
-                var error = pending.expiresAt <= now || pending.createdAt > now + 1000 ? '舞台拖拽请求已过期，请重新拖入' : pending.targetDocumentId !== documentId ? '拖拽目标文档已切换或关闭，请回到原文档重新拖入' : null;
+                var imageImport = pending.delivery === 'image-import';
+                var error = pending.expiresAt <= now || pending.createdAt > now + 1000 ? (imageImport ? '图片导入请求已过期，请重新导入' : '舞台拖拽请求已过期，请重新拖入') : pending.targetDocumentId !== documentId ? '目标文档已切换或关闭，请回到原文档重试' : null;
                 if (error) {
                     busy = true;
                     finish(pending, { ok: false, error: error });
@@ -354,12 +445,12 @@
         if (!busy || !current || current.requestId !== request.requestId || lastCompleted === request.requestId) return;
         var description = '素材：' + assetName(request) + '。';
         try { queue.complete(request, result); } catch (error) { result = { ok: false, error: '结果写入失败：' + String(error.message || error) }; }
-        description += result.ok ? '已粘贴到当前舞台。' : String(result.error || '粘贴未完成');
+        description += result.ok ? (request.delivery === 'image-import' ? '图片已导入当前舞台。' : '已粘贴到当前舞台。') : String(result.error || '插入未完成');
         if (result.warning) description += '\n' + result.warning;
         busy = false;
         current = null;
         lastCompleted = request.requestId;
-        lastResult = { text: result.ok ? '已粘贴 ✓' : '粘贴失败', state: result.ok ? 'success' : 'error', description: description };
+        lastResult = { text: result.ok ? (request.delivery === 'image-import' ? '已导入 ✓' : '已粘贴 ✓') : (request.delivery === 'image-import' ? '导入失败' : '粘贴失败'), state: result.ok ? 'success' : 'error', description: description };
         showResult();
         heartbeat();
     }
@@ -368,13 +459,14 @@
         if (!current || busy || adding || !connected) return;
         var request = current, prepared = null;
         busy = true;
-        setButton('正在粘贴…', 'busy', '正在粘贴素材：' + assetName(request), true);
+        setButton(request.delivery === 'image-import' ? '正在导入…' : '正在粘贴…', 'busy', '正在插入素材：' + assetName(request), true);
         if (!heartbeat()) { busy = false; return; }
         try {
             prepared = queue.prepare(request);
             var scriptURI = localURI(path.join(extension, 'insert-whole.jsfl'));
             var requestJSON = JSON.stringify(prepared);
-            var code = '(function(){try{return fl.runScript(' + JSON.stringify(scriptURI) + ',"AnShelfInsertWhole",' + JSON.stringify(requestJSON) + ',' + JSON.stringify(prepared.managedRoot) + ');}catch(e){return "{\\"version\\":1,\\"ok\\":false,\\"error\\":\\"JSFL加载失败\\"}";}})();';
+            var entryPoint = prepared.asset.kind === 'image' ? 'AnShelfImportImage' : 'AnShelfInsertWhole';
+            var code = '(function(){try{return fl.runScript(' + JSON.stringify(scriptURI) + ',' + JSON.stringify(entryPoint) + ',' + JSON.stringify(requestJSON) + ',' + JSON.stringify(prepared.managedRoot) + ');}catch(e){return "{\\"version\\":1,\\"ok\\":false,\\"error\\":\\"JSFL加载失败\\"}";}})();';
             api.evalScript(code, function (response) {
                 var result;
                 try {
@@ -417,18 +509,18 @@
         try { reader.readAsText(file, 'UTF-8'); } catch (error) { dropFailure(error); }
     }
 
-    insert.addEventListener('click', insertWhole);
+    if (insert) insert.addEventListener('click', insertWhole);
     if (addCurrent) addCurrent.addEventListener('click', addCurrentDocument);
     if (confirmCancel) confirmCancel.addEventListener('click', function () {
-        if (confirmation) finishAdd({ ok: false, cancelled: true });
+        if (confirmation) finishSettings({ action: 'cancel' });
     });
     if (confirmSave) confirmSave.addEventListener('click', function () {
-        if (!confirmation || unloaded || !adding || busy) return;
+        if (!confirmation || unloaded || dialogFinished) return;
         var accepted = confirmation, options;
         try { options = selectedImportOptions(); }
         catch (error) { settingsError.textContent = String(error.message || error); settingsError.hidden = false; return; }
-        closeConfirmation();
-        saveCurrentDocument(accepted.generation, accepted.documentId, options);
+        if (typeof queue.rememberDocumentImportOptions === 'function') queue.rememberDocumentImportOptions(options, function () { return window.localStorage; });
+        finishSettings({ action: 'confirm', options: options });
     });
     if (categorySearch) {
         categorySearch.addEventListener('input', function () { renderImportCategories(); showImportMenu('category', false); });
@@ -464,6 +556,8 @@
             if (!confirmation || !confirmation.settings) return;
             closeImportMenus(false);
             confirmation.settings.mode = button === importEffect ? 'effect' : 'ordinary';
+            var preference = confirmation.preferences && confirmation.preferences[confirmation.settings.mode];
+            if (preference) { setResolution(preference.previewResolution); preferExistingPreview.checked = preference.preferExistingPreview !== false; }
             renderImportCategories();
         });
     });
@@ -471,7 +565,7 @@
         if (!confirmation || !addDialog || addDialog.hidden) return;
         if (openImportMenu && (event.key === 'Escape' || event.keyCode === 27)) { event.preventDefault(); closeImportMenus(true); return; }
         if (openImportMenu && (event.key === 'Tab' || event.keyCode === 9)) closeImportMenus(true);
-        if (event.key === 'Escape' || event.keyCode === 27) { event.preventDefault(); finishAdd({ ok: false, cancelled: true }); }
+        if (event.key === 'Escape' || event.keyCode === 27) { event.preventDefault(); finishSettings({ action: 'cancel' }); }
         else if (event.key === 'Tab' || event.keyCode === 9) {
             var controls = Array.prototype.filter.call(addDialog.querySelectorAll('button:not([disabled]), input:not([disabled])'), function (control) { return control.getClientRects().length > 0; });
             var first = controls[0], last = controls[controls.length - 1];
@@ -494,10 +588,26 @@
         });
         document.body.addEventListener('drop', dropTransfer);
     }
+    if (settingsWindow) {
+        if (!api.addEventListener || !api.dispatchEvent || !api.closeExtension) return;
+        api.addEventListener(settingsRequestEvent, settingsRequest);
+        window.addEventListener('beforeunload', function () { finishSettings({ action: 'cancel' }); });
+        window.addEventListener('unload', function () {
+            finishSettings({ action: 'cancel' }); unloaded = true;
+            if (api.removeEventListener) api.removeEventListener(settingsRequestEvent, settingsRequest);
+        });
+        dispatchSettings(settingsResponseEvent, settingsExtension, { action: 'ready' });
+        return;
+    }
+    if (api.addEventListener) api.addEventListener(settingsResponseEvent, settingsResponse);
     setButton('正在连接…', 'waiting', '正在连接 AN 当前文档。', true);
     heartbeat();
     poll();
     refreshContext();
     timer = setInterval(refreshContext, 1000);
-    window.addEventListener('unload', function () { unloaded = true; if (timer) clearInterval(timer); if (confirmTimer) window.clearTimeout(confirmTimer); });
+    window.addEventListener('unload', function () {
+        unloaded = true; addGeneration++; closeConfirmation();
+        if (timer) clearInterval(timer);
+        if (api.removeEventListener) api.removeEventListener(settingsResponseEvent, settingsResponse);
+    });
 }());

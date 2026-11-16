@@ -72,7 +72,7 @@ function dropPanel() {
     complete() {},
   };
   const button = { disabled: true, attrs: {}, setAttribute(name, value) { this.attrs[name] = value; }, addEventListener() {} };
-  const document = { body: { addEventListener(name, handler) { listeners[name] = handler; } }, getElementById() { return button; } };
+  const document = { body: { addEventListener(name, handler) { listeners[name] = handler; } }, getElementById(id) { return id === 'insert' ? button : null; } };
   const window = { __adobe_cep__: { getSystemPath() { return '/plugin'; }, evalScript(code, callback) { if (!code.includes('AnShelfInsertWhole')) { callback('42'); return; } calls.push(['evalScript']); } },
     cep_node: { require(name) { if (name === 'process') return { env: { APPDATA: '/managed' } }; if (name === 'path') return path; return { Queue: function () { return queue; }, localURI: value => 'file:///' + value }; } }, addEventListener() {},
   };

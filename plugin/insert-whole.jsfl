@@ -26,8 +26,16 @@ function AnShelfCurrentDocumentForLibrary(confirmedDocumentId) {
         if (confirmedDocumentId !== undefined && confirmedDocumentId !== null) {
             if (!/^(0|[1-9][0-9]*)$/.test(String(confirmedDocumentId)) || Number(confirmedDocumentId) !== current.id) throw new Error("确认期间当前文档已切换，请重新点击加入素材库");
         } else if (!confirm("将当前文档保存并加入安安素材管理器？\n当前文档：" + (current.name || "未命名文档") + "\n若为库内文档将更新原素材。\n当前停靠栏无法显示导入设置，将沿用原素材设置；新素材按普通素材导入，分类可回管理器调整。\n是否继续？")) { result.cancelled = true; return AnShelfJSON(result); }
+        // Animate returns false for an already-saved, unmodified FLA.  Its
+        // isModified API is a method; only skip Save when that state is known
+        // explicitly.  Unknown state, dirty documents, and untitled documents
+        // still go through native Save so cancellation remains observable.
+        var cleanSavedFla = false;
+        if (current.path && current.pathURI && /\.fla$/i.test(current.pathURI) && typeof current.isModified === "function") {
+            try { cleanSavedFla = current.isModified() === false; } catch (stateError) { cleanSavedFla = false; }
+        }
         // Native Save opens Animate's own save dialog for an untitled document.
-        if (!fl.saveDocument(current)) { result.cancelled = true; return AnShelfJSON(result); }
+        if (!cleanSavedFla && !fl.saveDocument(current)) { result.cancelled = true; return AnShelfJSON(result); }
         if (!current.path || !current.pathURI || !/\.fla$/i.test(current.pathURI)) throw new Error("请先将当前文档保存为 FLA 文件");
         result.ok = true;
         result.file = current.path;
@@ -114,6 +122,44 @@ function AnShelfInsertWhole(requestJson, trustedRootURI) {
             } catch (restoreError) { result.warning = "请切回原目标文档检查插入结果"; }
         }
     }
+    return AnShelfJSON(result);
+}
+
+function AnShelfImportImage(requestJson, trustedRootURI) {
+    var result = { version: 1, ok: false };
+    try {
+        var request = AnShelfParseJSON(requestJson);
+        AnShelfValidateRequest(request, trustedRootURI, true);
+        result.requestId = request.requestId; result.assetId = request.asset.id;
+        var target = fl.getDocumentDOM();
+        if (!target || target.id !== request.targetDocumentId) throw new Error("图片目标文档已切换或关闭，请返回原文档重新导入");
+        var timeline = AnShelfStageTimeline(target), layer = timeline.currentLayer, frame = timeline.currentFrame;
+        var currentLayer = timeline.layers[layer];
+        if (!currentLayer || currentLayer.locked || currentLayer.visible === false || currentLayer.layerType && currentLayer.layerType !== "normal") throw new Error("请选择可编辑的普通图层导入图片");
+        var folder = "AnShelfImages/" + request.asset.hash, item = null, before = {}, i;
+        for (i = 0; i < target.library.items.length; i++) {
+            var existing = target.library.items[i]; before["$" + existing.name] = true;
+            if (existing.itemType === "bitmap" && existing.name.indexOf(folder + "/") === 0) item = existing;
+        }
+        result.reused = !!item;
+        if (!item) {
+            if (fl.getDocumentDOM() !== target || new Date().getTime() >= request.expiresAt) throw new Error("图片导入请求已失效，请重新导入");
+            if (target.importFile(request.asset.sourceURI, true) === false) throw new Error("AN 未能导入图片");
+            for (i = 0; i < target.library.items.length; i++) {
+                var imported = target.library.items[i];
+                if (imported.itemType === "bitmap" && !before["$" + imported.name]) { item = imported; break; }
+            }
+            if (!item) throw new Error("AN 未返回新图片，请检查元件库后重试");
+            AnShelfFolders(target.library, folder);
+            if (target.library.moveToFolder(folder, item.name, false) === false) throw new Error("图片元件归类失败，请检查 AN 元件库");
+        }
+        if (fl.getDocumentDOM() !== target || target.id !== request.targetDocumentId) throw new Error("图片目标文档已变化，请检查 AN");
+        AnShelfPrepareFrame(timeline, layer, frame); target.selectNone();
+        var center = { x: target.width / 2, y: target.height / 2 };
+        if (target.addItem(center, item) === false) throw new Error("图片放置到舞台失败");
+        AnShelfCenterSelection(target, center);
+        result.ok = true; result.rootSymbol = item.name; result.message = "图片已导入当前舞台";
+    } catch (error) { result.error = String(error.message || error); }
     return AnShelfJSON(result);
 }
 
@@ -229,10 +275,10 @@ function AnShelfBuildRoot(doc, prefix, scenes) {
     return AnShelfFindItem(doc.library, rootName);
 }
 
-function AnShelfValidateRequest(request, trustedRootURI) {
+function AnShelfValidateRequest(request, trustedRootURI, image) {
     if (!request || request.version !== 2 || !request.asset || !/^[A-Za-z0-9-]{1,80}$/.test(request.requestId || "")) throw new Error("无效的插入请求");
     if (request.delivery !== undefined) {
-        if (request.delivery !== "stage-drop" || typeof request.targetDocumentId !== "number" || !isFinite(request.targetDocumentId) || request.targetDocumentId < 0 || request.targetDocumentId > 9007199254740991 || Math.floor(request.targetDocumentId) !== request.targetDocumentId
+        if (request.delivery !== (image ? "image-import" : "stage-drop") || typeof request.targetDocumentId !== "number" || !isFinite(request.targetDocumentId) || request.targetDocumentId < 0 || request.targetDocumentId > 9007199254740991 || Math.floor(request.targetDocumentId) !== request.targetDocumentId
             || typeof request.createdAt !== "number" || !isFinite(request.createdAt) || request.createdAt < 0 || Math.floor(request.createdAt) !== request.createdAt
             || typeof request.expiresAt !== "number" || !isFinite(request.expiresAt) || request.expiresAt > 9007199254740991 || request.expiresAt !== request.createdAt + 5000) throw new Error("舞台拖拽目标文档或请求时效无效");
         var now = new Date().getTime();
@@ -241,7 +287,7 @@ function AnShelfValidateRequest(request, trustedRootURI) {
     if (!/^[a-f0-9]{64}$/.test(request.asset.hash || "")) throw new Error("无效的素材哈希");
     if (AnShelfURI(request.managedRoot) !== AnShelfURI(trustedRootURI)) throw new Error("素材库根目录不匹配");
     AnShelfRequireInside(request.asset.sourceURI, trustedRootURI, "assets/");
-    if (!/\.fla$/i.test(request.asset.sourceURI)) throw new Error("只能插入 FLA");
+    if (image ? request.asset.kind !== "image" || request.delivery !== "image-import" || !/\.(png|jpg|jpeg)$/i.test(request.asset.sourceURI) : request.asset.kind === "image" || !/\.fla$/i.test(request.asset.sourceURI)) throw new Error("插入素材格式无效");
     if (!FLfile.exists(request.asset.sourceURI)) throw new Error("素材库中的 FLA 不存在");
 }
 

@@ -453,6 +453,11 @@ dialog { max-width: calc(100vw - 35px); max-height: calc(100vh - 60px); }
 .update-preference input { accent-color: var(--violet); margin: 2px 0 0; }
 .update-preference small { display: block; color: var(--faint); font-size: 9px; }
 .update-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
+.update-reminder { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.update-reminder-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.update-reminder-controls label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink); }
+.update-reminder-controls input { width: 66px; padding: 6px 7px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }
+.update-reminder .field-hint { position: static; display: block; margin: 8px 0 0; line-height: 1.7; overflow-wrap: anywhere; }
 .update-footnote { margin: 12px 0 0; color: var(--faint); font-size: 9px; line-height: 1.7; }
 .update-support { margin-top: 13px; padding-top: 11px; border-top: 1px solid var(--line); }
 .update-project-link { max-width: 100%; padding: 0; color: var(--violet); font-size: 10px; line-height: 1.7; text-align: left; overflow-wrap: anywhere; }
@@ -535,5 +540,14 @@ dialog { max-width: calc(100vw - 35px); max-height: calc(100vh - 60px); }
 .zoom-controls output { min-width: 42px; text-align: center; font-size: 10px; color: var(--muted); }
 .zoom-controls .text-button { margin-left: 5px; font-size: 10px; }
 .lightbox-drag { margin-right: auto; padding: 8px 11px; }
+.preview-replacement { display: flex; align-items: center; gap: 13px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.preview-replacement .text-button { flex-shrink: 0; font-size: 11px; }
+.preview-replacement-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
+.preview-replacement p { margin: 0; color: var(--faint); font-size: 9px; line-height: 1.65; }
+.inspector .detail-origin { margin-bottom: 12px; }
+.inspector .preview-replacement { display: block; margin: 0 0 20px; padding: 0; border: 0; }
+.inspector .preview-replacement p { margin-top: 5px; }
+@media (max-height: 800px) { .preview-dialog .lightbox-preview { height: clamp(180px, 42vh, 340px); } }
+@media (max-width: 580px) { .preview-replacement { flex-direction: column; align-items: flex-start; gap: 7px; }.lightbox-actions { flex-wrap: wrap; } }
 @media (max-width: 1080px) { .import-entries .button { padding: 6px 7px; font-size: 9px; }.import-entries { gap: 4px; }.brand { margin-bottom: 16px; }.category-row .nav-item { gap: 3px; }.category-row-actions .icon-button { width: 16px; } }
 @media (max-height: 720px) { .sidebar { padding-top: 14px; }.brand { margin-bottom: 10px; }.workspace-label { margin-bottom: 5px; }.nav-item { padding-top: 5px; padding-bottom: 5px; }.section-label { margin-top: 8px; }.sidebar-bottom { padding-top: 7px; }.bridge-card { padding: 7px; }.local-note { display: none; }.audio-wave { height: 28px; }.audio-art { gap: 11px; }.audio-disc { width: 48px; height: 48px; } }

@@ -96,11 +96,12 @@ export function visibleAssets(assets, category, query, sort, categories = [], ty
 
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 
-export function gridColumns(width, preference = 'auto', gap = 12) {
+export function gridColumns(width, preference = 'auto', gap = 12, autoCardWidth = 190) {
   const available = Math.max(0, Number(width) || 0);
   const maximum = Math.max(1, Math.floor((available + gap) / (155 + gap)));
-  const desired = ['4', '5', '6'].includes(String(preference)) ? Number(preference) :
-    Math.max(1, Math.floor((available + gap) / (190 + gap)));
+  const target = Number.isFinite(autoCardWidth) && autoCardWidth >= 155 ? autoCardWidth : 190;
+  const desired = ['4', '5', '6', '7', '8'].includes(String(preference)) ? Number(preference) :
+    Math.max(1, Math.floor((available + gap) / (target + gap)));
   return Math.min(desired, maximum);
 }
 

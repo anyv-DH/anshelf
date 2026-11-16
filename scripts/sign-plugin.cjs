@@ -12,7 +12,7 @@ async function main() {
   const directory = path.join(work, 'plugin-' + randomUUID());
   const input = path.join(directory, 'input'), signed = path.join(directory, 'signed');
   await fs.mkdir(input, { recursive: true }); await fs.mkdir(signed);
-  const payload = ['index.html', 'style.css', 'icon.png', 'panel.js', 'queue.cjs', 'insert-whole.jsfl', 'README.md', 'CSXS/manifest.xml'];
+  const payload = ['index.html', 'import-settings.html', 'style.css', 'icon.png', 'panel.js', 'queue.cjs', 'insert-whole.jsfl', 'README.md', 'CSXS/manifest.xml'];
   // The signing tool creates mimetype itself. install.ps1 is an outer installer.
   for (const file of payload) {
     await fs.mkdir(path.dirname(path.join(input, file)), { recursive: true });

@@ -7,6 +7,6 @@ async function start(){
   const getBrowser=async()=>browser||(browser=await chromium.launch({headless:true}));
   const host=await createHost({root,render:createBrowserRenderer(root,getBrowser,()=>url),previewUrl:id=>`/preview/${id}`});
   const running=await createServer(host,{port:Number(process.env.PORT||4317),allowImportPaths:true});url=running.url;console.log(url);
-  const close=async()=>{running.server.close();if(browser)await browser.close();};process.on('SIGINT',async()=>{await close();process.exit();});
+  const close=async()=>{host.close();running.server.close();if(browser)await browser.close();};process.on('SIGINT',async()=>{await close();process.exit();});process.on('SIGTERM',async()=>{await close();process.exit();});
 }
 start().catch(error=>{console.error(error);process.exitCode=1;});

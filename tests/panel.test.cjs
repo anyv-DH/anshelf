@@ -5,11 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function panel({ connected = true, themed = false, canResize = false, settings = { categories: [], defaults: { mode: 'ordinary', categoryId: null, previewResolution: null, preferExistingPreview: true } }, settingsFailure = null } = {}) {
+function panel({ connected = true, themed = false, canResize = false, deferInspection = false, deferContext = false, settings = { categories: [], defaults: { mode: 'ordinary', categoryId: null, previewResolution: null, preferExistingPreview: true } }, settingsFailure = null } = {}) {
   const button = { disabled: true, textContent: '', title: '', attrs: {}, setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(event, handler) { this.click = handler; } };
   const addButton = { disabled: false, textContent: '', title: '', attrs: {}, setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(event, handler) { this.click = handler; } };
   let pending = null, response, tick, heartbeatError = false, addResponse, importResult = null, importRequest = null, timeOffset = 0;
-  const calls = [], completed = [], cleaned = [];
+  const calls = [], completed = [], cleaned = [], inspectionCallbacks = [], parentListeners = {}, childListeners = {};
   const request = id => ({ version: 2, requestId: id, managedRoot: 'managed', asset: { id, name: '一个名字很长的武器素材', hash: 'a'.repeat(64), sourcePath: 'managed/assets/test.fla' } });
   const queue = {
     heartbeat(busy) { calls.push(['heartbeat', busy]); if (heartbeatError) throw new Error('写入失败'); },
@@ -21,37 +21,69 @@ function panel({ connected = true, themed = false, canResize = false, settings =
     documentImportResult() { return importResult; },
     clearDocumentImport(id) { cleaned.push(id); },
   };
-  const receiver = { Queue: function () { return queue; }, localURI: value => 'file:///' + value };
+  const receiver = { Queue: function () { return queue; }, localURI: value => 'file:///' + value, documentImportOptions: require('../plugin/queue.cjs').documentImportOptions };
   const cep = { getSystemPath: () => '/extension', evalScript(code, callback) {
-    if (code.includes('AnShelfCurrentDocumentInfoForLibrary')) { calls.push(['inspectCurrent', code]); callback(JSON.stringify({ version: 1, ok: true, documentId: 42, name: '当前作品.fla', file: 'C:\\works\\当前作品.fla' })); return; }
+    if (code.includes('AnShelfCurrentDocumentInfoForLibrary')) { calls.push(['inspectCurrent', code]); if (deferInspection) inspectionCallbacks.push(callback); else callback(JSON.stringify({ version: 1, ok: true, documentId: 42, name: '当前作品.fla', file: 'C:\\works\\当前作品.fla' })); return; }
     if (code.includes('AnShelfCurrentDocumentForLibrary')) { calls.push(['saveCurrent', code]); addResponse = callback; return; }
-    if (!code.includes('AnShelfInsertWhole')) { callback('42'); return; }
+    if (!code.includes('AnShelfInsertWhole')) { if (!deferContext) callback('42'); return; }
     calls.push(['evalScript', code]); response = callback;
   } };
   const element = () => ({ value: '', checked: true, hidden: true, textContent: '', innerHTML: '', attrs: {}, style: {}, scrollHeight: 160, getBoundingClientRect() { return { left: 16, top: 190, bottom: 220, width: 348 }; }, querySelectorAll() { return []; }, querySelector() { return null; }, contains() { return true; }, setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(event, fn) { this[event === 'click' ? 'click' : event] = fn; }, focus() {} });
   const confirmation = { hidden: true }, confirmSave = element(), confirmCancel = element();
   const controls = Object.fromEntries(['current-file', 'category-search', 'import-category', 'category-options', 'resolution-options', 'import-ordinary', 'import-effect', 'preview-resolution', 'prefer-existing-preview', 'settings-error'].map(id => [id, element()]));
-  const window = { innerWidth: themed ? 380 : 48, innerHeight: themed ? 440 : 88, __adobe_cep__: connected ? cep : null, cep_node: { require(name) { if (name === 'process') return { env: { APPDATA: '/appdata' } }; if (name === 'path') return path; return receiver; } }, addEventListener() {}, setTimeout(fn) { fn(); return 1; }, clearTimeout() {} };
+  const window = { innerWidth: themed ? 380 : 48, innerHeight: themed ? 440 : 88, __adobe_cep__: connected ? cep : null, cep_node: { require(name) { if (name === 'process') return { env: { APPDATA: '/appdata' } }; if (name === 'path') return path; if (name === 'crypto') return require('node:crypto'); return receiver; } }, addEventListener() {}, setTimeout(fn) { fn(); return 1; }, clearTimeout() {} };
   if (canResize) cep.resizeContent = (width, height) => {
     calls.push(['resize', width, height]);
     if (canResize === 'throws') throw new Error('AN owns the docked dimensions');
     if (canResize !== 'ignored') { window.innerWidth = width; window.innerHeight = height; }
   };
+  cep.addEventListener = (name, fn) => { parentListeners[name] = fn; };
+  cep.removeEventListener = name => { delete parentListeners[name]; };
+  const dispatch = event => { if (parentListeners[event.type]) parentListeners[event.type](event); if (childListeners[event.type]) childListeners[event.type](event); };
+  cep.dispatchEvent = dispatch;
+  cep.requestOpenExtension = (id, params) => {
+    calls.push(['open', id, params]);
+    const childApi = { ...cep, addEventListener(name, fn) { childListeners[name] = fn; }, removeEventListener(name) { delete childListeners[name]; }, closeExtension() { confirmation.hidden = true; delete childListeners['com.anshelf.receiver.import-settings.request']; } };
+    const child = { ...window, innerWidth:380, innerHeight:440, __adobe_cep__:childApi };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../plugin/panel.js'), 'utf8'), { window:child, document:{ getElementById:id => id==='settings-window'?{}:id==='add-confirm'?confirmation:id==='confirm-save'?confirmSave:id==='confirm-cancel'?confirmCancel:controls[id]||null,addEventListener() {} }, JSON, Date:PanelDate, decodeURI });
+  };
   const PanelDate = class extends Date { constructor(...args) { super(...(args.length ? args : [Date.now() + timeOffset])); } };
-  const context = vm.createContext({ window, document: { getElementById: id => id === 'insert' ? button : id === 'add-current' ? addButton : (themed || canResize) && id === 'add-confirm' ? confirmation : (themed || canResize) && id === 'confirm-save' ? confirmSave : (themed || canResize) && id === 'confirm-cancel' ? confirmCancel : (themed || canResize) ? controls[id] || null : null, addEventListener() {} }, Date: PanelDate, JSON, decodeURI, setInterval: callback => { tick = callback; return 1; }, clearInterval() {} });
+  const context = vm.createContext({ window, document: { getElementById: id => id === 'insert' ? button : id === 'add-current' ? addButton : null, addEventListener() {} }, Date: PanelDate, JSON, decodeURI, setInterval: callback => { tick = callback; return 1; }, clearInterval() {} });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../plugin/panel.js'), 'utf8'), context);
-  return { button, addButton, confirmation, confirmSave, confirmCancel, controls, calls, completed, cleaned, choose(name, value) { const option = { getAttribute: () => value }; controls[name + '-options'].click({ target: { closest: () => option } }); }, send(id) { pending = request(id); tick(); }, tick() { tick(); }, advance(ms) { timeOffset += ms; tick(); }, saved(result) { addResponse(JSON.stringify(result)); }, imported(result) { importResult = result; tick(); }, failHeartbeat(value) { heartbeatError = value; tick(); }, captureResponse() { return response; }, respond(result) { response(JSON.stringify(result)); } };
+  return { button, addButton, confirmation, confirmSave, confirmCancel, controls, calls, completed, cleaned, inspectionCallbacks, resumeInspection() { deferInspection = false; }, choose(name, value) { const option = { getAttribute: () => value }; controls[name + '-options'].click({ target: { closest: () => option } }); }, send(id) { pending = request(id); tick(); }, tick() { tick(); }, advance(ms) { timeOffset += ms; tick(); }, saved(result) { addResponse(JSON.stringify(result)); }, imported(result) { importResult = result; tick(); }, failHeartbeat(value) { heartbeatError = value; tick(); }, captureResponse() { return response; }, respond(result) { response(JSON.stringify(result)); } };
 }
+
+test('an unanswered document inspection becomes a readable failure and permits retry, even while a background context probe is stuck', () => {
+  const view = panel({ themed: true, deferInspection: true, deferContext: true });
+  view.addButton.click();
+  assert.equal(view.addButton.disabled, true);
+  view.advance(11000);
+  assert.equal(view.addButton.disabled, false);
+  assert.equal(view.addButton.textContent, '加入失败');
+  assert.match(view.addButton.title, /AN.*响应|重新打开面板/);
+  assert.equal(view.calls.filter(call => call[0] === 'saveCurrent' || call[0] === 'import').length, 0);
+  view.resumeInspection();
+  view.addButton.click();
+  assert.equal(view.confirmation.hidden, false);
+  view.inspectionCallbacks[0](JSON.stringify({ version: 1, ok: true, documentId: 99, name: '迟到的文档', file: 'C:\\works\\old.fla' }));
+  view.confirmSave.click();
+  const save = view.calls.find(call => call[0] === 'saveCurrent');
+  assert.match(save[1], /AnShelfCurrentDocumentForLibrary\",\"42\"/);
+});
 
 test('compact CEP markup contains two vertical actions within a 48x88 default geometry', () => {
   const html = fs.readFileSync(path.join(__dirname, '../plugin/index.html'), 'utf8');
   const manifest = fs.readFileSync(path.join(__dirname, '../plugin/CSXS/manifest.xml'), 'utf8');
   assert.equal((html.split('<main>')[1].split('</main>')[0].match(/<button\b/g) || []).length, 2);
-  assert.match(html, /id="add-confirm"[^>]*hidden/);
+  const settingsHtml = fs.readFileSync(path.join(__dirname, '../plugin/import-settings.html'), 'utf8');
+  assert.doesNotMatch(html, /id="add-confirm"/);
+  assert.match(settingsHtml, /id="add-confirm"[^>]*hidden/);
+  assert.match(manifest, /<Type>Modeless<\/Type>/);
+  assert.match(manifest, /<MainPath>\.\/import-settings\.html<\/MainPath>/);
   assert.match(html, /id="add-current"/);
   assert.doesNotMatch(html, /<select\b|<option\b/);
-  assert.match(html, /id="category-options"[^>]*role="listbox"/);
-  assert.match(html, /id="resolution-options"[^>]*role="listbox"/);
+  assert.match(settingsHtml, /id="category-options"[^>]*role="listbox"/);
+  assert.match(settingsHtml, /id="resolution-options"[^>]*role="listbox"/);
   assert.doesNotMatch(html, /id="(?:state|name|path|asset|dot|detail)"/);
   assert.match(html, /<title>安安素材管理器<\/title>/);
   assert.match(manifest, /<Menu>安安素材管理器<\/Menu>/);
@@ -83,12 +115,13 @@ test('themed confirmation cancels before saving or queuing and confirms only the
   assert.equal(view.calls.filter(call => call[0] === 'import').length, 1);
 });
 
-test('floating narrow panel temporarily enlarges for confirmation and restores its exact size on cancel', () => {
+test('floating narrow panel opens settings independently and never resizes on cancel', () => {
   const view = panel({ canResize: true });
   view.addButton.click();
   assert.equal(view.confirmation.hidden, false);
   view.confirmCancel.click();
-  assert.deepEqual(view.calls.filter(call => call[0] === 'resize'), [['resize', 380, 440], ['resize', 48, 88]]);
+  assert.deepEqual(view.calls.filter(call => call[0] === 'resize'), []);
+  assert.deepEqual(view.calls.filter(call => call[0] === 'open'), [['open', 'com.anshelf.receiver.import-settings', '']]);
   assert.equal(view.calls.filter(call => call[0] === 'saveCurrent').length, 0);
 });
 
@@ -143,15 +176,12 @@ test('bad category loading and invalid form values cannot save or enqueue the cu
   assert.equal(invalid.calls.filter(call => call[0] === 'saveCurrent' || call[0] === 'import').length, 0);
 });
 
-test('docked panels that ignore or reject resize use native confirmation instead of an unreadable tiny dialog', () => {
+test('docked panels always use separate settings, including hosts that reject panel resizing', () => {
   for (const canResize of ['ignored', 'throws']) {
-    const view = panel({ canResize });
-    view.addButton.click();
-    assert.equal(view.confirmation.hidden, true);
-    const saves = view.calls.filter(call => call[0] === 'saveCurrent');
-    assert.equal(saves.length, 1);
-    assert.doesNotMatch(saves[0][1], /AnShelfCurrentDocumentForLibrary","42"/);
-    view.saved({ version: 1, ok: false, cancelled: true });
+    const view = panel({ canResize }); view.addButton.click();
+    assert.equal(view.confirmation.hidden, false);
+    assert.equal(view.calls.filter(call => call[0] === 'resize' || call[0] === 'saveCurrent').length, 0);
+    view.confirmCancel.click();
     assert.equal(view.addButton.textContent, '已取消');
     assert.equal(view.calls.filter(call => call[0] === 'import').length, 0);
   }
@@ -159,7 +189,7 @@ test('docked panels that ignore or reject resize use native confirmation instead
 
 test('add-current saves once, queues only a saved FLA, and shows the bounded import receipt', () => {
   const view = panel();
-  view.addButton.click(); view.addButton.click();
+  view.addButton.click(); view.addButton.click(); view.confirmSave.click();
   assert.equal(view.calls.filter(call => call[0] === 'saveCurrent').length, 1);
   assert.equal(view.addButton.disabled, true);
   view.saved({ version: 1, ok: true, file: 'C:\\works\\当前作品.fla' });
@@ -173,13 +203,13 @@ test('add-current saves once, queues only a saved FLA, and shows the bounded imp
 
 test('add-current cancellation and errors never submit an unsaved document', () => {
   const view = panel();
-  view.addButton.click();
+  view.addButton.click(); view.confirmSave.click();
   view.saved({ version: 1, ok: false, cancelled: true });
   assert.equal(view.addButton.textContent, '已取消');
   assert.match(view.addButton.title, /已取消加入/);
   assert.doesNotMatch(view.addButton.title, /取消保存/);
   assert.equal(view.addButton.disabled, false);
-  view.addButton.click();
+  view.addButton.click(); view.confirmSave.click();
   view.saved({ version: 1, ok: false, error: '请先打开 AN 文档' });
   assert.match(view.addButton.title, /请先打开/);
   assert.equal(view.calls.filter(call => call[0] === 'import').length, 0);
@@ -187,7 +217,7 @@ test('add-current cancellation and errors never submit an unsaved document', () 
 
 test('waiting for the manager times out and clears only this request, while native Save can wait for the user', () => {
   const view = panel();
-  view.addButton.click();
+  view.addButton.click(); view.confirmSave.click();
   view.advance(120000);
   assert.equal(view.addButton.disabled, true, 'the native Save dialog may stay open without timing out');
   view.saved({ version: 1, ok: true, file: 'C:\\works\\当前作品.fla' });

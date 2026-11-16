@@ -50,15 +50,15 @@ async function main() {
     assert.equal(await page.locator('.app-shell').evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length), 2);
     assert.equal(await page.locator('.titlebar').evaluate(element => getComputedStyle(element).getPropertyValue('-webkit-app-region')), 'drag');
     assert.equal(await page.locator('.titlebar-controls button').count(), 3);
-    const wordmark = await page.locator('.brand .anan-wordmark').evaluate(element => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, mask: getComputedStyle(element).maskImage, fill: getComputedStyle(element).backgroundImage }));
+    const wordmark = await page.locator('.brand .anan-wordmark').evaluate(element => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, mask: getComputedStyle(element).maskImage, fill: getComputedStyle(element).backgroundColor }));
     assert.equal(wordmark.width, 78); assert.equal(wordmark.height, 39);
     assert.match(wordmark.mask, /brand-anan\.svg/);
-    assert.match(wordmark.fill, /linear-gradient/);
+    assert.equal(wordmark.fill, 'rgb(243, 240, 250)');
     await page.screenshot({ path: path.join(out, 'ui-01-empty-1280.png'), scale: 'css', animations: 'disabled' });
     await page.locator('.import-main').click();
     assert.equal(await page.locator('#prefer-preview').isChecked(), true);
     await page.locator('[data-action="close-dialog"]').first().click();
-    checks.push('new brand and nonpersistent inspector');
+    checks.push('supplied AN monogram and nonpersistent inspector');
     await page.locator('[data-action="demo"]').click();
     await pollSnapshot(page, snapshot => snapshot.assets.length === 6 && snapshot.assets.every(asset => asset.previewStatus === 'ready'));
     await wait(page, () => document.querySelectorAll('.asset-card img').length === 6);
@@ -188,7 +188,7 @@ async function main() {
     await page.locator('[data-action="theme"][data-theme="warm"]').click();
     assert.equal(await page.locator('html').getAttribute('data-theme'), 'warm');
     assert.equal(await page.locator('body').evaluate(element => getComputedStyle(element).color), 'rgb(77, 61, 50)');
-    assert.notEqual(await page.locator('.brand .anan-wordmark').evaluate(element => getComputedStyle(element).backgroundImage), wordmark.fill);
+    assert.notEqual(await page.locator('.brand .anan-wordmark').evaluate(element => getComputedStyle(element).backgroundColor), wordmark.fill);
     await page.waitForFunction(() => document.querySelector('#toast').hidden);
     await page.screenshot({ path: path.join(out, 'ui-06-warm-1280.png'), scale: 'css', animations: 'disabled' });
     await page.locator('[data-action="theme"][data-theme="dark"]').click();

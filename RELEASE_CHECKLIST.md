@@ -1,5 +1,110 @@
 # Local release checklist
 
+## 0.3.20 cumulative public release — authorized; publication gates in progress
+
+- [x] Separate offline feedback dialog, exact email with truthful clipboard status, local QQ QR and explicit free-use/independence wording.
+- [x] Red/green unit coverage and isolated Electron regression, both layouts/six themes/minimum window; minimum-window return clipping reproduced and fixed, originals and library hashes unchanged.
+- [x] Actual Animate 2023 independent-document reproduction: clean saved FLA native save returns false and old import reports cancellation; adding a rectangle succeeds. Pre-fix evidence: `test-output/native-save-0320/before-fix.json`.
+- [x] Red/green clean-document import coverage; only an already saved FLA with `isModified() === false` skips save. Modified/unnamed/unknown states, cancellation, validation and document-switch protection retain their existing boundaries; directed60/60 pass.
+- [x] Manager and plugin both0.3.20; final11 runtime files re-signed and Adobe-verified, real installation completed. Evidence: `test-output/sign-plugin-0320.log`, `test-output/install-plugin-0320.log`.
+- [x] Post-fix actual Animate 2023 native-entry checks in independent documents: clean/no-op native-save false and modified FLA both yield `ok:true`; previous document restored and remains unmodified. Evidence: `test-output/native-save-0320/result.json`.
+- [x] Final11 installed/bundled runtime files match; running panel reload reports0.3.20 and the real index hash is unchanged. Evidence: `test-output/plugin-install-0320-result.json`.
+- [x] Final741/741 tests; fixed0.3.20 EXE feedback7/preview6/workspace13/root-navigation8/plugin-install6 flows, total40, zero page errors. Complete local directory audit matches171 source/ASAR files,167 copied runtime files and11 signed plugin files; evidence: `test-output/workspace-delivery-0320-result.json` and delivery `local-layout-manifest.json`.
+- [x] Desktop entry/private index backed up;0.3.19 closed normally, shortcut target/working directory/empty arguments/icon read back, unique0.3.20 main process64336 launched and real index hash unchanged. Evidence: delivery `desktop-update-0320.json`.
+- [x] Actual desktop feedback-window visual inspection passed: separate tools entries, exact email, full QR/quiet zone, free/independent notice and copy/return/close visible; dialog left open, no clipboard or QR action, real index unchanged. Evidence: delivery `desktop-ui-verification-0320.json`.
+- [ ] Full settings-window-to-real-user-library flow, unnamed-save cancellation and Animate 2024 host acceptance remain unclaimed.
+- [x] On 2026-11-16 the user explicitly authorized installer generation and publication of the new version; earlier pause is lifted. Preserve the completed local handoff above as its own evidence.
+- [x] README and Chinese release notes describe cumulative 0.3.11–0.3.20 features, 0.3.20 manager/plugin upgrade steps, free feedback/support separation and actual-host limits; no public-release success is preclaimed.
+- [ ] Build final 0.3.20 installer and portable from the reviewed source; verify source/ASAR/external resources, licenses and unchanged signed plugin runtime. Audit exact packaged EXE version, isolated user journeys and portable startup before sharing.
+- [ ] Prepare public installer/portable/plugin/usage/checksum attachments and Chinese share instructions; verify archive CRC, exact sizes and SHA256, excluding private libraries/backups/environment paths/signing keys.
+- [ ] Review and commit only authorized project code/docs/release materials, push the source and v0.3.20 tag, then publish the existing repository's new release after package gates pass.
+- [ ] Verify public release/latest/tag/download URLs and all attachment sizes/SHA256 against local artifacts; update publication evidence and desktop delivery only after success.
+
+## 0.3.19 preview and root navigation — completed; user testing pending
+
+- [x] Scene-member late-close bug reproduced before fixing; fixed-EXE preview6 flows/18 geometries cover both layouts, actual pixels/zoom, details, long names, return and media compatibility.
+- [x] Remembered visibility/order, direct selection and overflow added without category writes or header growth; classic minimum-window overlap also reproduced and fixed.
+- [x] Final728/728 tests; fixed-EXE37 real-Electron flows, zero page errors; wide/small screenshots inspected and original/library hashes unchanged.
+- [x] Complete runtime only;167 source/ASAR and167 copied runtime files match,11 unchanged0.3.16 plugin files and Adobe signature verified.
+- [x] Previous desktop entry/private index backed up,0.3.18 closed normally;0.3.19 started as13968 and actual reported scene preview confirmed; More Categories left open for testing, real index unchanged.
+- [ ] User testing; installers/portable/commit/push/publication remain paused.
+
+## 0.3.18 page onboarding — completed; user testing pending
+
+- [x] 按用户确认实现真实页面聚光高亮与六步提示卡，首次自动、跳过／完成记忆、工具重看。
+- [x] AN工具临时展开恢复、可见焦点、空库目标、滚动后可见卡与固定工具栏裁剪均先红后绿；无新增轮询，不改原件及库元数据。
+- [x] 最终722/722测试；源码与固定EXE各31组（引导10／工作区13／提醒8），零页面错误；引导78组布局主题几何另加1组滚动定位。
+- [x] 仅本机Electron运行目录构建；164源码／ASAR、167运行文件、11份未改0.3.16插件和Adobe签名核验通过。
+- [x] 正常退出旧.17，备份入口与私有索引；桌面已切到.18，启动54344及实际app.asar页面确认，自动引导已打开；真实索引哈希不变。
+- [ ] 用户测试后再决定生成安装包；portable／提交／推送／公开发布继续暂停，AN宿主验证不由UI回归替代。
+
+## 0.3.17 local navigation and one-click update — completed; user testing pending
+
+- [x] 普通／历史顶层导航、新建自动选中、移除重复「…」、启动提醒及1–365天记忆完成。
+- [x] 软件一键更新一次确认后下载／校验／启动，保留仅下载；失败重试、取消和迟到守卫先红后绿；AN插件一键安装入口保留。
+- [x] 特效未归类移除与缺失副本显式重试恢复完成，原件不变；真实源仅只读复制到隔离库验证。
+- [x] 最终单测695/695；固定EXE工作区13、导航6、提醒8、更新9、特效4、插件6，共46组零页面错误。升级使用隔离IPC，插件在隔离APPDATA执行真实签名安装。
+- [x] 仅完整目录构建；158源码／ASAR、165运行文件、11份未改插件及Adobe签名核验通过。
+- [x] 正常关闭旧0.3.16、备份入口与私有索引；桌面已切到0.3.17并实际启动，进程／路径／界面一致。
+- [ ] 用户继续测试；安装包／portable／提交／推送／公开发布仍暂停。真实远端升级安装与AN宿主验证不由隔离回归替代。
+
+## 0.3.16 local image and group update — completed; user testing pending
+
+- [x] 图片AN发送／拖出、并排场景组合、可选小文件夹分组及清爽离线双码完成，原件不变。
+- [x] 持久化／失败回滚／重导入撤销／键盘组选择先红后绿；全量652/652、零失败／跳过。
+- [x] 源码与固定EXE各26组真实Electron流程、零页面错误；CEP6组、隔离真实插件安装6组通过；两码离线解码与官方原码一致。
+- [x] 仅完整目录构建，151份源码与ASAR、165份运行文件SHA256核验；11份随附／已安装插件0.3.16字节一致且Adobe签名有效。
+- [x] 正常退出旧0.3.15，私有回退备份、桌面更新读回并实际启动0.3.16；用户已确认成功打开。
+- [ ] 等待用户实际AN图片导入与跨窗口拖拽验收；没有用自动化替代宿主结果。
+- [ ] 安装包／portable／提交／推送／公开发布继续暂停，等待用户测试后指示。
+
+## 0.3.15 local layout correction — completed; user testing pending
+
+- [x] 用户明确完整品牌、顶部合并及滚动仍分页的要求；安装包继续暂停。
+- [x] 新增分页回归先红后绿；618/618单测、源码及固定程序各13组真实UI通过。
+- [x] 165目录文件、138源码／ASAR、11份未改签名插件及许可证核验；未生成安装包。
+- [x] 保留旧程序及入口回退，桌面切换并核对实际0.3.15进程49924和界面。
+
+## 0.3.14 local test handoff — completed; user testing pending
+
+- [x] 用户要求更新桌面测试入口，并追加用户SVG新Logo；安装包与远端发布继续暂停。
+- [x] 八顶层、统一导入／拖入／图片、分层分类／复制目标、折叠详情、适屏／滚动及自定义数量完成源码。
+- [x] 使用隔离库复现并修复分类接线、收藏复制、图片动作与音频遮挡分页。
+- [x] 最终614/614，固定构建真实UI10组零错误；137源码／ASAR及165目录文件、签名插件和许可证核验通过。
+- [x] 备份旧快捷方式及私有库索引，切换0.3.14并正常关闭旧进程；实际新版进程／路径／界面及新Logo均确认。
+- [ ] 用户测试后才生成安装包，公开发布继续暂停。
+
+## 0.3.13 local workspace and bluewhite testing delivery
+
+Completed 2026-11-15: full suite 540/540; source and fixed-EXE practical UI 14 flows/11 geometry cases; previous UI regressions 30 flows; fixed-EXE smoke 4 groups; 122 source/ASAR files and 165 complete runtime files verified; 11 unchanged signed plugin files; desktop shortcut backed up, updated and read back. No installer/portable generation or remote publication. Evidence and test boundaries are recorded in PROJECT_STATE.md.
+
+- Preserve external originals, managed-file bytes, existing category metadata and private libraries. Test only isolated synthetic/demo fixtures. New assignments enforce category roles; historical mixed memberships remain readable.
+- Pass taxonomy/project persistence, preview detail draft/focus recovery, 7/8 density, both layouts, six themes, four preview backgrounds, real scrolling/restart/audio and existing import/preview/skin regressions. Record actual counts and evidence in PROJECT_STATE.md.
+- Build only `electron-builder --win --dir` after the final source/UI build. Audit source/ASAR, external helper/licenses, unchanged installed/old/bundled 0.3.11 plugin bytes and original Adobe signature before creating the separate 0.3.13 runtime directory; hash every copied file.
+- Run the final fixed EXE with isolated data, record `app.isPackaged`, version, actual executable and consistent restart contexts. Inspect bluewhite standard/minimum-window and preview screenshots before updating the desktop shortcut.
+- Back up the existing shortcut and read back its new target, empty arguments and working directory. Preserve old directories and running processes; the user exits the old app normally before reopening the desktop entry.
+- Do not generate installer/portable artifacts, commit, push or publish while user testing is pending. This UI release adds no new Animate-host verification or plugin installation.
+
+## 0.3.12 local UI testing delivery
+
+- Keep original files and user library private and untouched; preserve all existing 0.3.11 changes and the signed plugin bytes.
+- Require preference, theme, contrast, grid, actual Electron layout/state/restart checks and existing import/preview/skin regressions. Record evidence in PROJECT_STATE.md.
+- Manager 0.3.12 continues to bundle plugin 0.3.11. Build only a full unpacked runtime, audit archive and external resources, then hash a separate stable output directory.
+- Back up and read back the desktop shortcut. Preserve old running processes and old runtime directories; the user can close normally and reopen.
+- Installer/portable generation, commits, pushes and public releases remain paused pending user testing.
+
+## 0.3.11 local testing handoff — installer and publication deferred
+
+- [x] 用户恢复本地程序、插件及桌面入口更新；后续明确安装包等其测试完成后再生成，已停止 portable／NSIS 任务，不发布远端。
+- [x] 源码全量 461/461；最终插件重签、Adobe 验证及签后安装／更新／bridge 49/49。
+- [x] 运行目录审计 105 份源码／UI／文档／演示、12 份外置插件、4 份许可证一致；真实构建 21 组隔离流程通过，零页面错误。
+- [x] 完整程序复制到固定 0.3.11 本地测试目录，167 文件 SHA256 相同；稳定目录启动冒烟 3 组，未读取或修改真实素材库。
+- [x] AN 插件实际更新为 0.3.11，安装字节一致、Adobe 验证通过，旧插件留备份；未操作 AN 文档。
+- [x] 桌面原快捷方式更新并读回核验，参数为空；旧快捷方式与 0.3.10 程序保留。
+- [ ] 用户在真实 AN 宿主及日常素材流程中测试；AN 中重新打开面板加载新版。
+- [x] 用户报告「等待确认」无弹窗后修正 Modeless 可见性，重签／安装修复版，桌面切换至「本地测试版-弹窗修复」；467/467、签后定向53/53、浏览器6组、目录安装6组及稳定启动3组通过。用户已在 Animate 2023 确认弹窗正常并完成入库；日常全面测试继续。
+- [ ] 用户测试完成后再生成安装包／便携包、核验交付附件；远端发布继续待授权恢复。
+
 ## 0.3.10 release gates — published and verified
 
 - [x] 主程序、插件清单、软件内显示及本地交付脚本统一 0.3.10；README 明确要求更新插件并重开面板，不再写“插件仍 0.3.9，无需更新”。

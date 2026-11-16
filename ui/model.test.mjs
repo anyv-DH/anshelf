@@ -41,6 +41,42 @@ test('grid density honors a requested row while reducing columns to keep cards r
   assert.equal(gridColumns(1012, 'invalid'), 5);
 });
 
+test('a wider automatic card target gives the material-first layout larger previews', () => {
+  assert.equal(gridColumns(1012, 'auto', 12, 235), 4);
+  assert.equal(gridColumns(460, 'auto', 12, 235), 1);
+  assert.equal(gridColumns(1440, 'auto', 16, 235), 5);
+  assert.equal(gridColumns(1012, 'invalid', 12, 235), 4);
+  assert.equal(gridColumns(155, 'auto', 12, 235), 1);
+  assert.equal(gridColumns(0, 'auto', 12, 235), 1);
+  assert.equal(gridColumns(1012, 'auto'), 5);
+});
+
+test('explicit row density keeps its existing choices and width safety with a larger automatic target', () => {
+  assert.equal(gridColumns(1012, '4', 12, 235), 4);
+  assert.equal(gridColumns(1012, '5', 12, 235), 5);
+  assert.equal(gridColumns(1012, '6', 12, 235), 6);
+  assert.equal(gridColumns(700, '6', 12, 235), 4);
+  assert.equal(gridColumns(460, '5', 12, 235), 2);
+  assert.equal(gridColumns(155, '4', 12, 235), 1);
+});
+
+test('seven and eight columns are explicit choices with the same minimum card width', () => {
+  assert.equal(gridColumns(1480, '7', 12, 235), 7);
+  assert.equal(gridColumns(1480, '8', 12, 235), 8);
+  assert.equal(gridColumns(1324, '8'), 8);
+  assert.equal(gridColumns(1323, '8'), 7);
+  assert.equal(gridColumns(700, '7', 12, 235), 4);
+  assert.equal(gridColumns(460, '8', 12, 235), 2);
+  assert.equal(gridColumns(0, '8'), 1);
+});
+
+test('invalid automatic card targets fall back to the classic readable target', () => {
+  for (const target of [undefined, null, '', '235', 'invalid', NaN, Infinity, -Infinity, 0, -235, 100, {}, []]) {
+    assert.equal(gridColumns(1012, 'auto', 12, target), 5, `target: ${String(target)}`);
+    assert.equal(gridColumns(460, 'auto', 12, target), 2, `target: ${String(target)}`);
+  }
+});
+
 test('likes expire after 24 hours while favorites remain visible', () => {
   const now = Date.now();
   const assets = [

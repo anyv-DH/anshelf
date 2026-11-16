@@ -1,0 +1,29 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+#dialog:has(.author-feedback) { width: min(760px, calc(100vw - 40px)); max-height: calc(100vh - 48px); }
+.author-feedback { margin-top: 18px; font-size: 12px; line-height: 1.75; color: var(--ink); }
+.author-feedback p { margin: 0 0 12px; }
+.feedback-free-notice { padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); }
+.author-feedback-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 24px; margin-top: 20px; }
+.author-feedback-grid > section { min-width: 0; }
+.author-feedback h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+.feedback-email-section > label { display: block; font-size: 11px; color: var(--muted); margin: 14px 0 6px; }
+.feedback-email-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.feedback-email-row input { flex: 1 1 220px; min-width: 0; width: 100%; font-size: 13px; padding: 9px 10px; user-select: text; }
+.feedback-email-row .button { padding: 8px 11px; white-space: nowrap; }
+.feedback-copy-status { min-height: 3.5em; margin-top: 8px !important; color: var(--ink); overflow-wrap: anywhere; }
+.feedback-send-hint { color: var(--muted); }
+.feedback-community-section { padding-left: 24px; border-left: 1px solid var(--line); }
+.feedback-community-code { margin: 0 0 12px; text-align: center; }
+.feedback-community-code img { display: block; width: 210px; max-width: 100%; height: auto; margin: 0 auto; border-radius: 6px; background: #fff; }
+.feedback-community-code figcaption { color: var(--muted); font-size: 11px; margin-top: 8px; }
+.feedback-trigger { border-bottom: 1px solid var(--line) !important; padding-bottom: 10px !important; margin-bottom: 3px !important; }
+@media (max-height: 650px) {
+  #dialog:has(.author-feedback) { padding: 20px; }
+  .author-feedback { margin-top: 12px; }
+  .author-feedback-grid { margin-top: 14px; }
+  #dialog:has(.author-feedback) .dialog-actions { margin-top: 12px; }
+}
+@media (max-width: 650px) {
+  .author-feedback-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .feedback-community-section { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+}

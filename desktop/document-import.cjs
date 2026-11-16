@@ -7,6 +7,7 @@ const { atomicJson } = require('../core/files.cjs');
 const { documentImportOptions } = require('../core/document-import-options.cjs');
 const MAX_DESCRIPTOR_BYTES = 16384;
 const REQUEST_TTL = 120000;
+const RECOVERY_INTERVAL = 10000;
 const ID = /^[a-zA-Z0-9-]{1,80}$/;
 
 async function noLinks(file) {
@@ -21,7 +22,7 @@ async function noLinks(file) {
   }
 }
 
-async function createDocumentImportReceiver({ root, importDocument, onResult = () => {} }) {
+async function createDocumentImportReceiver({ root, importDocument, onResult = () => {}, watch = fs.watch, recoveryTimers = { setTimeout, clearTimeout } }) {
   if (typeof importDocument !== 'function') throw new Error('缺少当前文档导入处理器');
   const base = path.join(path.resolve(root), 'bridge/document-import');
   const inbox = path.join(base, 'inbox'), results = path.join(base, 'results');
@@ -30,7 +31,7 @@ async function createDocumentImportReceiver({ root, importDocument, onResult = (
     await fsp.mkdir(directory, { recursive: true });
     await noLinks(directory);
   }
-  let closed = false, requested = false, running = null;
+  let closed = false, requested = false, running = null, watcher = null, recoveryTimer = null;
 
   async function consume(name) {
     const requestId = name.slice(0, -5);
@@ -95,11 +96,47 @@ async function createDocumentImportReceiver({ root, importDocument, onResult = (
     })().finally(() => { running = null; });
     return running;
   }
-  const watcher = fs.watch(inbox, () => { drain().catch(() => {}); });
-  watcher.unref();
-  watcher.on('error', () => { watcher.close(); });
-  try { await drain(); } catch (error) { watcher.close(); throw error; }
-  return { drain, async close() { closed = true; watcher.close(); if (running) await running; } };
+  function stopWatcher() {
+    const previous = watcher;
+    watcher = null;
+    previous?.close();
+  }
+
+  function startWatcher() {
+    if (closed || watcher) return;
+    try {
+      const next = watch(inbox, () => drain().catch(() => {}));
+      watcher = next;
+      next.on('error', () => { if (watcher === next) stopWatcher(); });
+      next.on('close', () => { if (watcher === next) watcher = null; });
+      next.unref();
+    } catch { stopWatcher(); /* A temporary watch failure is retried by recovery. */ }
+  }
+
+  function scheduleRecovery() {
+    if (closed || recoveryTimer !== null) return;
+    // fs.watch may drop notifications or stop after an error. Check only the
+    // small inbox, with the same serial drain and receipt-based deduplication.
+    recoveryTimer = recoveryTimers.setTimeout(async () => {
+      recoveryTimer = null;
+      if (closed) return;
+      try { await noLinks(inbox); startWatcher(); await drain(); }
+      catch { /* A later deadline can recover temporary filesystem failures. */ }
+      finally { scheduleRecovery(); }
+    }, RECOVERY_INTERVAL);
+    recoveryTimer.unref();
+  }
+
+  startWatcher();
+  try { await drain(); } catch (error) { stopWatcher(); throw error; }
+  scheduleRecovery();
+  return { drain, async close() {
+    closed = true;
+    if (recoveryTimer !== null) recoveryTimers.clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+    stopWatcher();
+    if (running) await running;
+  } };
 }
 
 module.exports = { createDocumentImportReceiver };

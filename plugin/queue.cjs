@@ -7,6 +7,7 @@ const MAX_FLA_BYTES = 512 * 1024 * 1024;
 const DRAG_TTL_MS = 5 * 60 * 1000;
 const STAGE_DROP_TTL_MS = 5000;
 const IMPORT_RESOLUTIONS = [256, 512, 1024, 2048];
+const DOCUMENT_IMPORT_PREFERENCES_KEY = 'anshelf.documentImportPreferences.v1';
 
 function documentImportOptions(options) {
   if (options === undefined) return undefined;
@@ -41,7 +42,7 @@ function validateDelivery(request, now) {
     if (request.expiresAt !== undefined || request.targetDocumentId !== undefined) throw new Error('舞台拖拽请求缺少传递方式');
     return;
   }
-  if (request.delivery !== 'stage-drop' || !validDocumentId(request.targetDocumentId)
+  if (!['stage-drop', 'image-import'].includes(request.delivery) || !validDocumentId(request.targetDocumentId)
     || !Number.isSafeInteger(request.createdAt) || !Number.isSafeInteger(request.expiresAt)
     || request.createdAt < 0 || request.expiresAt !== request.createdAt + STAGE_DROP_TTL_MS) throw new Error('舞台拖拽目标文档或请求时效无效');
   if (now !== undefined && (request.createdAt > now + 1000 || request.expiresAt <= now)) throw new Error('舞台拖拽请求已过期，请重新拖入');
@@ -96,7 +97,8 @@ class Queue {
     validateDelivery(request);
     if (path.resolve(request.managedRoot || '') !== this.root) throw new Error('素材库根目录不匹配');
     const source = this.requireInside(request.asset.sourcePath, 'assets');
-    if (path.extname(source).toLowerCase() !== '.fla' || !fs.statSync(source).isFile()) throw new Error('只能插入本地 FLA');
+    const image = request.asset.kind === 'image';
+    if (image !== (request.delivery === 'image-import') || !(image ? ['.png','.jpg','.jpeg'] : ['.fla']).includes(path.extname(source).toLowerCase()) || !fs.statSync(source).isFile()) throw new Error('只能插入受管理的本地 FLA 或图片');
     return source;
   }
   pending() {
@@ -130,7 +132,7 @@ class Queue {
     return request;
   }
   heartbeat(busy, documentId = null) {
-    this.atomic('status.json', { version: 1, updatedAt: Date.now(), app: 'Animate', busy: Boolean(busy), capabilities: { stageDrop: 1, directSource: 1 }, documentId: validDocumentId(documentId) ? documentId : null });
+    this.atomic('status.json', { version: 1, updatedAt: Date.now(), app: 'Animate', pluginVersion: '0.3.20', busy: Boolean(busy), capabilities: { stageDrop: 1, directSource: 1, imageImport: 1 }, documentId: validDocumentId(documentId) ? documentId : null });
   }
   documentImportFile(folder, requestId) {
     if (!/^[a-zA-Z0-9-]{1,80}$/.test(requestId || '')) throw new Error('当前文档请求编号无效');
@@ -139,11 +141,43 @@ class Queue {
     fs.mkdirSync(directory, { recursive: true });
     return path.join(directory, requestId + '.json');
   }
-  documentImportSettings(file) {
-    const defaults = { mode: 'ordinary', categoryId: null, previewResolution: null, preferExistingPreview: true };
+  documentImportPreferences(storage) {
+    const preferences = { ordinary: { previewResolution: null, preferExistingPreview: true }, effect: { previewResolution: null, preferExistingPreview: true } };
+    try {
+      const target = typeof storage === 'function' ? storage() : storage;
+      if (!target || typeof target.getItem !== 'function') return preferences;
+      const raw = target.getItem(DOCUMENT_IMPORT_PREFERENCES_KEY);
+      if (typeof raw !== 'string' || raw.length > 4096) return preferences;
+      const saved = JSON.parse(raw);
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved) || saved.version !== 1) return preferences;
+      for (const mode of ['ordinary', 'effect']) {
+        const value = saved[mode];
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+        if (value.previewResolution === null || IMPORT_RESOLUTIONS.includes(value.previewResolution)) preferences[mode].previewResolution = value.previewResolution;
+        if (typeof value.preferExistingPreview === 'boolean') preferences[mode].preferExistingPreview = value.preferExistingPreview;
+      }
+    } catch (error) { /* CEP can deny localStorage; import remains usable with defaults. */ }
+    return preferences;
+  }
+  rememberDocumentImportOptions(options, storage) {
+    const selected = documentImportOptions(options);
+    if (!selected || !selected.mode || !Object.prototype.hasOwnProperty.call(selected, 'previewResolution')
+      || !Object.prototype.hasOwnProperty.call(selected, 'preferExistingPreview')) throw new Error('当前文档导入偏好选项不完整');
+    try {
+      const target = typeof storage === 'function' ? storage() : storage;
+      if (!target || typeof target.getItem !== 'function' || typeof target.setItem !== 'function') return false;
+      const preferences = this.documentImportPreferences(target);
+      preferences[selected.mode] = { previewResolution: selected.previewResolution, preferExistingPreview: selected.preferExistingPreview };
+      target.setItem(DOCUMENT_IMPORT_PREFERENCES_KEY, JSON.stringify({ version: 1, ...preferences }));
+      return true;
+    } catch (error) { return false; }
+  }
+  documentImportSettings(file, storage) {
+    const preferences = this.documentImportPreferences(storage);
+    const defaults = { mode: 'ordinary', categoryId: null, ...preferences.ordinary };
     const index = path.join(this.root, 'library.json');
     noLinks(index);
-    if (!fs.existsSync(index)) return { categories: [], defaults };
+    if (!fs.existsSync(index)) return { categories: [], defaults, preferences, matchedAsset: false };
     try {
       const stat = fs.statSync(index);
       if (!stat.isFile() || stat.size > 32 * 1024 * 1024) throw new Error('素材库分类索引过大或不可读');
@@ -169,8 +203,9 @@ class Queue {
         defaults.mode = asset.assetType === 'effect' ? 'effect' : 'ordinary';
         defaults.categoryId = categories.some(category => category.id === asset.categoryId) ? asset.categoryId : null;
         defaults.previewResolution = IMPORT_RESOLUTIONS.includes(asset.previewResolution) ? asset.previewResolution : null;
+        defaults.preferExistingPreview = preferences[defaults.mode].preferExistingPreview;
       }
-      return { categories, defaults };
+      return { categories, defaults, preferences, matchedAsset: Boolean(asset) };
     } catch (error) { throw new Error('无法读取素材库分类，请先在管理器检查素材库：' + String(error.message || error)); }
   }
   requestDocumentImport(file, options) {
@@ -217,7 +252,8 @@ class Queue {
     } finally { fs.closeSync(descriptor); }
     if (hash.digest('hex') !== request.asset.hash) throw new Error('素材哈希不匹配，不能插入');
     const prepared = { version: 2, requestId: request.requestId, managedRoot: localURI(this.root), asset: { id: request.asset.id, hash: request.asset.hash, name: request.asset.name, sourceURI: localURI(source) } };
-    if (request.delivery === 'stage-drop') Object.assign(prepared, { delivery: request.delivery, createdAt: request.createdAt, expiresAt: request.expiresAt, targetDocumentId: request.targetDocumentId });
+    if (request.asset.kind === 'image') prepared.asset.kind = 'image';
+    if (['stage-drop', 'image-import'].includes(request.delivery)) Object.assign(prepared, { delivery: request.delivery, createdAt: request.createdAt, expiresAt: request.expiresAt, targetDocumentId: request.targetDocumentId });
     return prepared;
   }
   complete(request, result) {
@@ -230,4 +266,4 @@ class Queue {
   }
 }
 
-module.exports = { Queue, localURI, MAX_FLA_BYTES, DRAG_TTL_MS, STAGE_DROP_TTL_MS };
+module.exports = { Queue, localURI, documentImportOptions, MAX_FLA_BYTES, DRAG_TTL_MS, STAGE_DROP_TTL_MS };

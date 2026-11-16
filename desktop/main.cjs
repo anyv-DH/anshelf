@@ -6,6 +6,8 @@ const {spawn}=require('node:child_process');
 const {randomUUID}=require('node:crypto');
 const {pathToFileURL}=require('node:url');
 const {createHost}=require('./host.cjs');
+const {createImportSelections,registerImportSelectionIpc}=require('./import-selection.cjs');
+const {THEME_BACKGROUNDS}=require('./themes.cjs');
 const {createRenderer}=require('./previews.cjs');
 const {createMediaResponse}=require('./media.cjs');
 const {registerNativeDrag}=require('./native-drag.cjs');
@@ -21,7 +23,7 @@ const {createUpdateDownloader}=require('./update-download.cjs');
 const {createUpdateService}=require('./update-service.cjs');
 const {resolveManagedPath}=require('../core/bridge.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'anshelf',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
-let win,host,documentImports,updates,skin,confirmations,updateService;
+let win,host,documentImports,updates,skin,confirmations,updateService,importSelections,disposeImportSelections;
 async function openAnimateFile(file){
   const executable=process.env.ANSHELF_ANIMATE_EXE;
   if(executable){
@@ -34,6 +36,23 @@ async function openAnimateFile(file){
   const error=await shell.openPath(file);
   if(error)throw new Error('无法在 AN 中打开素材：'+error+'。请检查 FLA 默认关联，或设置 ANSHELF_ANIMATE_EXE。');
   return true;
+}
+const IMPORT_PICKERS={
+  ordinary:{title:'导入普通素材',name:'Adobe Animate 素材',extensions:['fla']},
+  effect:{title:'导入特效素材',name:'Adobe Animate 素材',extensions:['fla']},
+  audio:{title:'导入音频',name:'音频文件',extensions:['mp3','wav','ogg','flac']},
+  image:{title:'导入图片素材',name:'图片文件',extensions:['png','jpg','jpeg','webp','gif']}
+};
+async function pickImportFiles({mode='ordinary'}={}){
+  if(typeof mode!=='string'||!Object.hasOwn(IMPORT_PICKERS,mode))throw new Error('导入模式无效');
+  const configured=IMPORT_PICKERS[mode];
+  const result=await dialog.showOpenDialog(win,{title:configured.title,properties:['openFile','multiSelections'],filters:[{name:configured.name,extensions:configured.extensions}]});
+  return result.canceled?[]:result.filePaths;
+}
+async function pickImportFolder({mode='ordinary'}={}){
+  if(typeof mode!=='string'||!Object.hasOwn(IMPORT_PICKERS,mode))throw new Error('导入模式无效');
+  const result=await dialog.showOpenDialog(win,{title:IMPORT_PICKERS[mode].title+'文件夹',properties:['openDirectory']});
+  return result.canceled?[]:result.filePaths;
 }
 if(!app.requestSingleInstanceLock())app.quit();
 app.on('second-instance',()=>{if(win){win.show();win.focus();}});
@@ -69,17 +88,20 @@ app.whenReady().then(async()=>{
   for(const [method,action] of Object.entries({getSkin:()=>skin.get(),selectSkin:()=>skin.select(),updateSkin:patch=>skin.update(patch),resetSkin:()=>skin.reset()})){
     ipcMain.handle('shelf:'+method,async(event,...args)=>{if(event.sender!==win.webContents)throw new Error('操作不允许');return action(...args);});
   }
-  host=await createHost({root,render:createRenderer(root),createPoster:createGifPoster({BrowserWindow,ipcMain,nativeImage}),validateImage:async file=>{const image=nativeImage.createFromPath(file);if(image.isEmpty())return false;const size=image.getSize();return size.width>0&&size.height>0&&size.width<=20000&&size.height<=20000;},
-    pickFiles:async({mode='ordinary'}={})=>{if(!['ordinary','effect','audio'].includes(mode))throw new Error('导入模式无效');const audio=mode==='audio';const r=await dialog.showOpenDialog(win,{title:audio?'导入音频':mode==='effect'?'导入特效素材':'导入普通素材',properties:['openFile','multiSelections'],filters:[{name:audio?'音频文件':'Adobe Animate 素材',extensions:audio?['mp3','wav','ogg','flac']:['fla']}]});return r.canceled?[]:r.filePaths;},
-    pickFolder:async({mode='ordinary'}={})=>{if(!['ordinary','effect','audio'].includes(mode))throw new Error('导入模式无效');const r=await dialog.showOpenDialog(win,{title:mode==='audio'?'选择音频文件夹':mode==='effect'?'选择特效素材文件夹':'选择素材文件夹',properties:['openDirectory']});return r.canceled?[]:r.filePaths;},
+  host=await createHost({root,convertToPng:async file=>{const image=nativeImage.createFromPath(file);if(image.isEmpty())throw new Error('图片解码失败');return image.toPNG();},render:createRenderer(root),createPoster:createGifPoster({BrowserWindow,ipcMain,nativeImage}),validateImage:async file=>{const image=nativeImage.createFromPath(file);if(image.isEmpty())return false;const size=image.getSize();return size.width>0&&size.height>0&&size.width<=20000&&size.height<=20000;},
+    pickFiles:pickImportFiles,
+    pickFolder:pickImportFolder,
+    pickPreviewFile:async({name})=>{const r=await dialog.showOpenDialog(win,{title:`更换“${name}”的预览图`,properties:['openFile'],filters:[{name:'预览图片',extensions:['png','jpg','jpeg','webp','gif']}]});return r.canceled?[]:r.filePaths;},
     compact:async()=>windowMode.toggleCompact(),
     openInAnimate:openAnimateFile,
     revealFile:async file=>{shell.showItemInFolder(file);},
     pickDuplicateFolder:async()=>{const r=await dialog.showOpenDialog(win,{title:'原文件夹不可用，请选择新文件的保存位置',properties:['openDirectory','createDirectory']});return r.canceled?[]:r.filePaths;},
-    confirmDuplicate:({name})=>confirmations.request({title:'复制并加入素材库',message:`请您确认：为“${name}”创建一份可独立编辑的新素材？`,detail:'确认后会在素材库中新增一份独立文件并自动入库，继承原素材的分类、类型、标签和预览设置。\n\n新素材不继承收藏或点赞；以后修改新素材，不会影响原素材。不在外部原文件夹额外复制文件。',confirmLabel:'确认复制并入库',cancelLabel:'暂不复制'}),
-    setTheme:async(theme)=>{win.setBackgroundColor(theme==='warm'?'#f7f1e9':'#171520');return theme;},
+    confirmDuplicate:({name,categoryLabel='沿用原分类'})=>confirmations.request({title:'复制并加入素材库',message:`请您确认：为“${name}”创建一份独立的新素材？`,detail:'复制目标分类：'+categoryLabel+'。确认后在素材库中新增独立文件，保留素材类型、标签和预览设置。'+String.fromCharCode(10,10)+'新素材不继承收藏或点赞；以后修改新素材，不会影响原素材。不在外部原文件夹额外复制文件。',confirmLabel:'确认复制并入库',cancelLabel:'暂不复制'}),
+    setTheme:async(theme)=>{win.setBackgroundColor(THEME_BACKGROUNDS[theme]);return theme;},
     windowAction:async(action)=>windowMode.action(action),
     openPluginFolder:async()=>{const error=await shell.openPath(app.isPackaged?path.join(process.resourcesPath,'AnimatePlugin'):path.join(app.getAppPath(),'plugin'));if(error)throw new Error('无法打开 AN 面板文件夹：'+error);return true;}});
+  importSelections=createImportSelections({excludedRoot:root,pickFiles:pickImportFiles,pickFolder:pickImportFolder,importPaths:(paths,options)=>host.api.importPaths(paths,options)});
+  disposeImportSelections=registerImportSelectionIpc({ipcMain,webContents:win.webContents,selections:importSelections});
   protocol.handle('anshelf',request=>{try{const url=new URL(request.url);if(url.hostname==='skin')return skin.respond(request);if(url.hostname==='media')return createMediaResponse(request,host.library);const id=decodeURIComponent(url.pathname.slice(1));if(!/^[\w-]{1,128}$/.test(id))return new Response('',{status:404});let preview;if(url.hostname==='poster'){const asset=host.library.getAsset(id);if(!asset?.previewPosterPath)return new Response('',{status:404});preview=resolveManagedPath(host.library.root,asset.previewPosterPath,'previews');if(path.extname(preview).toLowerCase()!=='.png')return new Response('',{status:404});}else if(url.hostname==='preview')preview=host.library.previewPath(id);else return new Response('',{status:404});if(!preview)return new Response('',{status:404});return net.fetch(pathToFileURL(preview).toString());}catch{return new Response('',{status:404});}});
   ipcMain.handle('shelf:call',async(event,method,args)=>{if(event.sender!==win.webContents||typeof method!=='string'||!Array.isArray(args)||['importPaths','prepareDrag','sendStageDrop'].includes(method)||!Object.hasOwn(host.api,method))throw new Error('操作不允许');return host.api[method](...args);});
   registerNativeDrag({ipcMain,webContents:win.webContents,prepareDrag:id=>host.api.prepareDrag(id),createIcon:kind=>nativeImage.createFromPath(path.join(__dirname,kind==='audio'?'drag-audio.png':'icon.png')).resize({width:32,height:32}),reportError:message=>{if(!win.isDestroyed())win.webContents.send('shelf:drag-error',message);}});
@@ -94,5 +116,5 @@ app.whenReady().then(async()=>{
     if(!win.isDestroyed())win.webContents.send('shelf:import-notice',result.ok?`AN 当前文档已${result.updated?'更新':'加入'}素材库：${result.name}`:`AN 文档加入失败：${result.error||'请重试'}`);
   }});
 }).catch(error=>{dialog.showErrorBox('安安素材管理器启动失败',error.message);app.quit();});
-app.on('before-quit',()=>{documentImports?.close();updates?.close();confirmations?.close();updateService?.close();});
+app.on('before-quit',()=>{importSelections?.close();disposeImportSelections?.();host?.close?.();documentImports?.close();updates?.close();confirmations?.close();updateService?.close();});
 app.on('window-all-closed',()=>app.quit());

@@ -5,15 +5,20 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { insidePath, atomicJson, sha256, findSidecar, copySidecar, scanFla } = require('./files.cjs');
 const { PREVIEW_RESOLUTIONS, normalizePreviewResolution } = require('./preview-resolution.cjs');
-const { normalizeCategoryScopes, validateCategoryScopes, resolveCategoryScope, assertCategoryMoveScope } = require('./category-scope.cjs');
+const { normalizeCategoryScopes, validateCategoryScopes, resolveCategoryScope, assertCategoryMoveScope, assignmentCategoryScope } = require('./category-scope.cjs');
 const { locateManagedFile } = require('./managed-file-recovery.cjs');
 const { resolveManagedPath } = require('./bridge.cjs');
 const { copyName, importedAsset, samePath } = require('./independent-copy.cjs');
 const { documentImportOptions } = require('./document-import-options.cjs');
+const { copyCustomPreview, checkImage } = require('./custom-preview.cjs');
+const { retireReplacedPreviews, retireUnusedPreview, validateRetiredPreviews, nextPreviewCleanupAt, cleanRetiredPreviews } = require('./preview-cache.cjs');
+const { validateTaxonomy, ensureTaxonomy, assertCategoryEditable } = require('./library-taxonomy.cjs');
+const sceneGroups = require('./scene-groups.cjs');
+const folderImageGroups = require('./folder-image-groups.cjs');
 
-const DEFAULT_CATEGORIES = ['武器', '人物', '背景', '特效', '道具'];
 const LIKE_DURATION_MS = 24 * 60 * 60 * 1000;
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac'];
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 const EDITABLE_FIELDS = new Set(['name', 'tags', 'favorite', 'categoryId', 'liked']);
 const PREVIEW_FIELDS = new Set(['previewPath', 'previewPosterPath', 'previewStatus', 'previewError', 'width', 'height', 'frames', 'frameRate', 'scene', 'frame', 'previewOrigin', 'previewFormat', 'previewAnimated', 'previewFrameCount', 'previewDurationMs', 'previewWarning']);
 const clone = (value) => structuredClone(value);
@@ -29,8 +34,8 @@ function setAssetCategories(asset, ids) {
 
 function checkAssetCategory(state, asset, id) {
   checkCategory(state, id);
-  const target = state.categories.find(item => item.id === id);
-  if (target && target.scope !== 'all' && target.scope !== (asset.assetType || 'ordinary')) throw new Error('素材类型与分类类型不匹配');
+  const scope = assignmentCategoryScope(state.categories, id);
+  if (scope !== 'all' && scope !== (asset.assetType || 'ordinary')) throw new Error('素材类型与分类类型不匹配');
 }
 
 function isLiked(asset, now = Date.now()) {
@@ -82,6 +87,7 @@ function categoryDescendantIds(categories, id) {
 }
 
 function normalizeState(state) {
+  sceneGroups.reconcileSceneGroups(state);
   normalizeCategoryScopes(state.categories);
   for (const category of state.categories) { category.parentId ??= null; category.pinned ??= false; }
   const knownCategories = new Set(state.categories.map(category => category.id));
@@ -102,9 +108,9 @@ function checkCategoryName(state, name, parentId, exceptId) {
 
 function historyChanges(before, after) {
   const changes = [];
-  for (const collection of ['assets', 'categories']) {
-    const oldItems = new Map(before[collection].map((item) => [item.id, item]));
-    const newItems = new Map(after[collection].map((item) => [item.id, item]));
+  for (const collection of ['assets', 'categories', 'sceneGroups']) {
+    const oldItems = new Map((before[collection] || []).map((item) => [item.id, item]));
+    const newItems = new Map((after[collection] || []).map((item) => [item.id, item]));
     for (const id of new Set([...oldItems.keys(), ...newItems.keys()])) {
       const oldItem = oldItems.get(id);
       const newItem = newItems.get(id);
@@ -147,6 +153,13 @@ function mergeRestoredAsset(existing, restored) {
 
 function remapMergedAssetHistory(history, oldId, currentId) {
   for (const changes of history) for (const change of changes) {
+    if (change.collection === 'sceneGroups') {
+      for (const group of [change.before, change.after, change.previous]) if (group) {
+        if (Array.isArray(group.assetIds)) group.assetIds = [...new Set(group.assetIds.map(id => id === oldId ? currentId : id))];
+        if (group.coverAssetId === oldId) group.coverAssetId = currentId;
+      }
+      continue;
+    }
     // An old creation must not later delete an independently reimported asset.
     if (change.collection !== 'assets' || change.id !== oldId || change.before === null) continue;
     change.id = currentId;
@@ -159,16 +172,19 @@ function validateState(state, root) {
   if (state.version !== 1 || !Array.isArray(state.assets) || !Array.isArray(state.categories) || !Array.isArray(state.history)) {
     throw new Error('素材库元数据格式无效，请先备份并检查 library.json');
   }
+  validateRetiredPreviews(state, root);
+  sceneGroups.validateSceneGroups(state);
   for (const asset of state.assets) {
     if (!asset || typeof asset.id !== 'string' || !/^[a-f0-9]{64}$/.test(asset.hash)
       || !Array.isArray(asset.sourcePaths) || !Array.isArray(asset.tags)) throw new Error('素材记录格式无效');
     insidePath(root, asset.managedPath);
     if (asset.previewPath) insidePath(root, asset.previewPath);
     if (asset.previewPosterPath) insidePath(root, asset.previewPosterPath);
-    if (asset.kind != null && !['fla', 'audio'].includes(asset.kind)) throw new Error('无效的素材类型');
+    if (asset.kind != null && !['fla', 'audio', 'image'].includes(asset.kind)) throw new Error('无效的素材类型');
     if (asset.assetType != null && !['ordinary', 'effect', 'audio'].includes(asset.assetType)) throw new Error('无效的素材导入类型');
     if (asset.independentCopy != null && typeof asset.independentCopy !== 'boolean') throw new Error('无效的独立副本标志');
     if (asset.kind === 'audio' && (!AUDIO_EXTENSIONS.includes(asset.extension) || asset.assetType !== 'audio')) throw new Error('无效的音频素材记录');
+    if (asset.kind === 'image' && (!IMAGE_EXTENSIONS.includes(asset.extension) || asset.assetType !== 'ordinary')) throw new Error('无效的图片素材记录');
     if (asset.categoryIds != null && (!Array.isArray(asset.categoryIds) || asset.categoryIds.some(id => typeof id !== 'string' || !id))) throw new Error('素材分类列表无效');
     normalizePreviewResolution(asset.previewResolution);
   }
@@ -191,6 +207,7 @@ function validateState(state, root) {
     }
   }
   validateCategoryScopes(state.categories);
+  validateTaxonomy(state);
 }
 
 class Library {
@@ -200,16 +217,20 @@ class Library {
     await fs.mkdir(absolute, { recursive: true });
     await fs.mkdir(path.join(absolute, 'assets'), { recursive: true });
     await fs.mkdir(path.join(absolute, 'previews'), { recursive: true });
-    let state;
+    let state, fresh = false;
     try {
       state = JSON.parse(await fs.readFile(path.join(absolute, 'library.json'), 'utf8'));
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
-      state = { version: 1, assets: [], categories: DEFAULT_CATEGORIES.map((name) => ({ id: randomUUID(), name, parentId: null })), history: [] };
-      await atomicJson(path.join(absolute, 'library.json'), state);
+      state = { version: 1, assets: [], categories: [], history: [] };
+      fresh = true;
     }
     validateState(state, absolute);
     normalizeState(state);
+    if (ensureTaxonomy(state, { fresh })) {
+      validateState(state, absolute);
+      await atomicJson(path.join(absolute, 'library.json'), state);
+    }
     return new Library(absolute, state);
   }
 
@@ -222,12 +243,16 @@ class Library {
 
   snapshot() {
     const now = Date.now();
-    return clone({ assets: this.state.assets.map(asset => assetSnapshot(asset, now)), categories: this.state.categories });
+    return clone({ assets: this.state.assets.map(asset => ({ ...assetSnapshot(asset, now), previewUndoUntil: this.previewUndoUntil(asset.id, now) })), categories: this.state.categories, sceneGroups: this.state.sceneGroups || [] });
   }
 
   getAsset(id) {
     const asset = this.state.assets.find((item) => item.id === id);
-    return asset ? clone(assetSnapshot(asset)) : null;
+    return asset ? clone({ ...assetSnapshot(asset), previewUndoUntil: this.previewUndoUntil(id) }) : null;
+  }
+
+  previewUndoUntil(id, now = Date.now()) {
+    return this.state.previewHistory?.findLast(item => item.assetId === id && item.expiresAt > now)?.expiresAt ?? null;
   }
 
   assetPath(id) {
@@ -313,12 +338,16 @@ class Library {
     return asset.previewPath ? insidePath(this.root, asset.previewPath) : null;
   }
 
-  change(operation, undoable = true) {
+  change(operation, undoable = true, { previewRestore = false } = {}) {
     const pending = this.queue.then(async () => {
       const next = clone(this.state);
       const result = await operation(next);
+      sceneGroups.reconcileSceneGroups(next);
+      retireReplacedPreviews(this.state, next, this.root, Date.now(), !previewRestore);
       const changes = historyChanges(this.state, next);
-      if (changes.length || JSON.stringify(next.history) !== JSON.stringify(this.state.history)) {
+      if (changes.length || JSON.stringify(next.history) !== JSON.stringify(this.state.history)
+        || JSON.stringify(next.retiredPreviews) !== JSON.stringify(this.state.retiredPreviews)
+        || JSON.stringify(next.previewHistory) !== JSON.stringify(this.state.previewHistory)) {
         if (undoable && changes.length) next.history = [...next.history.slice(-49), changes];
         await atomicJson(path.join(this.root, 'library.json'), next);
         this.state = next;
@@ -330,16 +359,70 @@ class Library {
     return pending;
   }
 
-  async duplicateAsset(id) {
+  async replacePreview(id, file, { validateImage = async () => true, createPoster = async () => false } = {}) {
+    const createdFiles = [];
+    try {
+      await this.change(async state => {
+        const asset = findAsset(state, id);
+        if (asset.kind === 'audio') throw new Error('音频素材不使用图片预览');
+        Object.assign(asset, await copyCustomPreview(this.root, file, { validateImage, createPoster }, createdFiles));
+        return assetSnapshot(asset);
+      }, false);
+      return this.getAsset(id);
+    } catch (error) {
+      for (const file of createdFiles) await fs.unlink(file).catch(() => {});
+      throw error;
+    }
+  }
+
+  async restorePreview(id) {
+    await this.change(state => {
+      const asset = findAsset(state, id);
+      const index = (state.previewHistory || []).findLastIndex(item => item.assetId === id && item.expiresAt > Date.now());
+      if (index < 0) throw new Error('没有可撤回的预览，或已超过 48 小时');
+      const previous = state.previewHistory[index].preview;
+      for (const relative of [previous.previewPath, previous.previewPosterPath].filter(Boolean)) resolveManagedPath(this.root, relative, 'previews');
+      Object.assign(asset, previous, { previewRevision: randomUUID() });
+      state.previewHistory.splice(index, 1);
+    }, false, { previewRestore: true });
+    return this.getAsset(id);
+  }
+
+  nextPreviewCleanupAt(now = Date.now()) {
+    return nextPreviewCleanupAt(this.state, this.root, now);
+  }
+
+  retireUnusedPreview(output) {
+    return this.change(state => retireUnusedPreview(state, this.root, output), false);
+  }
+
+  async cleanupExpiredPreviews(now = Date.now()) {
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error('预览清理时间无效');
+    // Persist expiry before deleting bytes. If this commit fails, every image
+    // still referenced by the on-disk undo history remains available.
+    await this.change(state => {
+      if (state.previewHistory) state.previewHistory = state.previewHistory.filter(item => item.expiresAt > now);
+    }, false);
+    return this.change(state => cleanRetiredPreviews(state, this.root, now), false);
+  }
+
+  async duplicateAsset(id, options = undefined) {
     const createdFiles = [];
     let directory;
     let createdDirectory = false;
     try {
       return await this.change(async state => {
         const original = findAsset(state, id);
+        if (options !== undefined && (options === null || typeof options !== 'object' || Array.isArray(options))) throw new Error('复制选项无效');
+        const hasCategory = options !== undefined && Object.hasOwn(options, 'categoryId');
+        const categoryId = hasCategory ? options.categoryId : undefined;
+        if (hasCategory && categoryId !== null) checkAssetCategory(state, original, categoryId);
+        const copyCategoryIds = hasCategory ? (categoryId === null ? [] : [categoryId]) : assetCategoryIds(original);
         const source = resolveManagedPath(this.root, original.managedPath, 'assets');
         const extension = path.extname(source).toLowerCase();
-        if (original.kind === 'audio' ? !AUDIO_EXTENSIONS.includes(extension) : extension !== '.fla') throw new Error('素材文件格式无效');
+        const validExtension = original.kind === 'audio' ? AUDIO_EXTENSIONS.includes(extension)
+          : original.kind === 'image' ? IMAGE_EXTENSIONS.includes(extension) : extension === '.fla';
+        if (!validExtension) throw new Error('素材文件格式无效');
         const name = copyName(original, state.assets);
         const copyId = randomUUID();
         const relative = path.join('assets', copyId, name + extension);
@@ -355,6 +438,7 @@ class Library {
         if (hash !== original.hash || await sha256(source) !== hash) throw new Error('素材保存内容在复制时发生变化，请保存后重试');
         const copy = { ...clone(original), id: copyId, name, originalName: name + extension,
           independentCopy: true, sourcePaths: [], managedPath: relative, hash,
+          categoryId: copyCategoryIds[0] || null, categoryIds: copyCategoryIds,
           favorite: false, likedAt: null, createdAt: new Date().toISOString(), previewRevision: randomUUID() };
         if (copy.kind !== 'audio') {
           let reusable = original.previewStatus === 'ready' && !!original.previewPath;
@@ -375,6 +459,17 @@ class Library {
               reusable = false;
               for (const file of createdFiles.splice(1)) await fs.rm(file, { force: true }).catch(() => {});
             }
+          }
+          if (!reusable && copy.kind === 'image') {
+            const targetRelative = 'previews/' + copyId + '-image-' + copy.previewRevision + extension;
+            const target = insidePath(this.root, targetRelative);
+            await checkImage(destination);
+            await fs.copyFile(destination, target, constants.COPYFILE_EXCL);
+            createdFiles.push(target);
+            Object.assign(copy, { previewPath: targetRelative, previewPosterPath: null,
+              previewStatus: 'ready', previewError: null, previewOrigin: 'custom',
+              previewFormat: extension.slice(1), previewAnimated: extension === '.gif', previewWarning: null });
+            reusable = true;
           }
           if (!reusable) Object.assign(copy, { previewPath: null, previewPosterPath: null,
             previewStatus: 'pending', previewError: null, previewOrigin: null, previewFormat: null,
@@ -398,13 +493,12 @@ class Library {
       if (asset.kind === 'audio') throw new Error('AN 当前文档只能是 FLA');
       const mode = options.mode || asset.assetType;
       if (options.categoryId) {
-        checkCategory(state, options.categoryId);
-        const category = state.categories.find(item => item.id === options.categoryId);
-        if (category.scope !== 'all' && category.scope !== mode) throw new Error('分类与所选素材类型不匹配');
+        checkAssetCategory(state, { assetType: mode }, options.categoryId);
       }
       for (const id of assetCategoryIds(asset)) {
         const category = state.categories.find(item => item.id === id);
-        if (category && category.scope !== 'all' && category.scope !== mode) throw new Error('已有分类与所选素材类型不匹配，请先调整分类后重试');
+        const scope = mode !== asset.assetType && category ? assignmentCategoryScope(state.categories, id) : category?.scope;
+        if (category && scope !== 'all' && scope !== mode) throw new Error('已有分类与所选素材类型不匹配，请先调整分类后重试');
       }
       const resolution = options.previewResolution === undefined ? asset.previewResolution : options.previewResolution;
       const previewChanged = mode !== asset.assetType || options.preferExistingPreview === false
@@ -420,35 +514,44 @@ class Library {
     }, false);
   }
 
-  importPaths(paths, { preferExistingPreview = true, mode = 'ordinary', previewResolution = null, categoryId = undefined } = {}) {
-    return this.change(async (state) => {
-      if (!['ordinary', 'effect', 'audio'].includes(mode)) throw new Error('导入类型无效');
+  async importPaths(paths, { preferExistingPreview = true, mode = 'ordinary', previewResolution = null, categoryId = undefined, groupByFolder = false } = {}) {
+    if (typeof groupByFolder !== 'boolean' || (groupByFolder && mode !== 'image')) throw new Error('按文件夹分组仅支持图片导入，选项须为布尔值');
+    const createdImageFiles = [];
+    try {
+      return await this.change(async (state) => {
+      if (!['ordinary', 'effect', 'audio', 'image'].includes(mode)) throw new Error('导入类型无效');
+      const assetMode = mode === 'image' ? 'ordinary' : mode;
       if (categoryId !== undefined) {
         checkCategory(state, categoryId);
         if (categoryId !== null) {
           const target = state.categories.find((category) => category.id === categoryId);
-          const scope = target?.scope || 'all';
-          if (scope !== 'all' && scope !== mode) throw new Error(`“${target.name}”是${scope === 'effect' ? '特效' : scope === 'audio' ? '音频' : '普通'}素材分类，不能放入${mode === 'effect' ? '特效' : mode === 'audio' ? '音频' : '普通'}素材`);
+          const scope = assignmentCategoryScope(state.categories, categoryId);
+          if (scope !== 'all' && scope !== assetMode) throw new Error(`“${target.name}”是${scope === 'effect' ? '特效' : scope === 'audio' ? '音频' : '普通'}素材分类，不能放入${mode === 'effect' ? '特效' : mode === 'audio' ? '音频' : '普通'}素材`);
         }
       }
-      const resolution = normalizePreviewResolution(previewResolution);
-      const kind = mode === 'audio' ? 'audio' : 'fla';
+      const resolution = mode === 'image' ? null : normalizePreviewResolution(previewResolution);
+      const kind = mode === 'audio' ? 'audio' : mode === 'image' ? 'image' : 'fla';
       if (!Array.isArray(paths) || paths.some((filename) => typeof filename !== 'string' || !filename.trim())) {
         throw new Error('导入路径须为文件或文件夹路径列表');
       }
       const result = { added: 0, duplicates: 0, failed: [], assets: [] };
       const visited = new Set();
       const changed = new Map();
+      const imageFolders = new Map();
       const fail = (filename, error) => result.failed.push({ path: filename, error: error.message || String(error) });
       const visit = async (source) => {
         const key = process.platform === 'win32' ? source.toLowerCase() : source;
         if (visited.has(key)) return;
         visited.add(key);
+        const imageFolder = groupByFolder ? await folderImageGroups.sourceFolder(source, imageFolders) : null;
         const sidecar = kind === 'fla' && preferExistingPreview
           ? await findSidecar(source, mode === 'effect' ? ['.gif', '.png', '.jpg', '.jpeg', '.webp'] : undefined) : null;
         if (sidecar && (await fs.stat(sidecar)).size > 50 * 1024 * 1024) throw new Error('预览图不能超过 50 MB');
         const temporary = path.join(this.root, 'assets', `${randomUUID()}.tmp`);
+        let managedCreated = null;
+        let imagePreviewCreated = null;
         try {
+          if (kind === 'image') await checkImage(source);
           await fs.copyFile(source, temporary);
           const hash = await sha256(temporary);
           let asset = importedAsset(state.assets, this.root, source, hash, kind);
@@ -456,13 +559,38 @@ class Library {
           if (!asset) {
             const originalName = path.basename(source);
             asset = { id: randomUUID(), hash, name: path.parse(source).name, originalName,
-              kind, assetType: mode, extension: path.extname(source).toLowerCase(), previewResolution: kind === 'fla' ? resolution : null,
+              kind, assetType: assetMode, extension: path.extname(source).toLowerCase(), previewResolution: kind === 'fla' ? resolution : null,
               sourcePaths: [], managedPath: `assets/${hash}${path.extname(source).toLowerCase()}`, previewPath: null,
-              previewStatus: kind === 'audio' ? 'none' : 'pending', previewError: null, categoryId: categoryId ?? null, categoryIds: categoryId ? [categoryId] : [], tags: [], favorite: false, likedAt: null,
+              previewStatus: kind === 'audio' ? 'none' : kind === 'image' ? 'ready' : 'pending', previewError: null, categoryId: categoryId ?? null, categoryIds: categoryId ? [categoryId] : [], tags: [], favorite: false, likedAt: null,
               createdAt: new Date().toISOString(), width: null, height: null, frames: null, previewOrigin: null, previewFormat: null };
-            await fs.rename(temporary, insidePath(this.root, asset.managedPath));
+            const managed = insidePath(this.root, asset.managedPath);
+            if (kind === 'image') {
+              try {
+                await fs.copyFile(temporary, managed, constants.COPYFILE_EXCL);
+                managedCreated = managed;
+                createdImageFiles.push(managed);
+              } catch (error) {
+                if (error.code !== 'EEXIST') throw error;
+                if (await sha256(managed) !== hash) throw new Error('素材库同名文件内容不一致，请先检查素材库');
+              }
+            } else {
+              await fs.rename(temporary, managed);
+              managedCreated = managed;
+            }
+            if (kind === 'image') {
+              const revision = randomUUID();
+              asset.previewPath = `previews/${hash}-image-${revision}${asset.extension}`;
+              asset.previewOrigin = 'custom';
+              asset.previewRevision = revision;
+              asset.previewFormat = asset.extension.slice(1);
+              asset.previewAnimated = asset.extension === '.gif';
+              imagePreviewCreated = insidePath(this.root, asset.previewPath);
+              await fs.copyFile(managed, imagePreviewCreated, constants.COPYFILE_EXCL);
+              createdImageFiles.push(imagePreviewCreated);
+            }
           }
           const typeChanged = kind === 'fla' && asset.assetType !== mode;
+          if (typeChanged && categoryId === undefined) for (const id of assetCategoryIds(asset)) checkAssetCategory(state, { assetType: mode }, id);
           if (typeChanged) asset.assetType = mode;
           const resolutionChanged = kind === 'fla' && (asset.previewResolution ?? null) !== resolution;
           if (kind === 'fla') asset.previewResolution = resolution;
@@ -492,6 +620,13 @@ class Library {
             result.added++;
           } else result.duplicates++;
           changed.set(asset.id, asset);
+          if (imageFolder) imageFolder.ids.add(asset.id);
+        } catch (error) {
+          // The index commit is atomic, so remove any bytes created before a
+          // per-file failure is reported to the batch caller.
+          if (imagePreviewCreated) await fs.rm(imagePreviewCreated, { force: true }).catch(() => {});
+          if (managedCreated) await fs.rm(managedCreated, { force: true }).catch(() => {});
+          throw error;
         } finally {
           await fs.rm(temporary, { force: true });
         }
@@ -503,11 +638,16 @@ class Library {
           // exclusion. Folders and unregistered files inside it remain ignored.
           try { await visit(resolveManagedPath(this.root, registered.managedPath, 'assets')); }
           catch (error) { fail(filename, error); }
-        } else await scanFla(filename, visit, fail, this.root, kind === 'audio' ? AUDIO_EXTENSIONS : ['.fla']);
+        } else await scanFla(filename, visit, fail, this.root, kind === 'audio' ? AUDIO_EXTENSIONS : kind === 'image' ? IMAGE_EXTENSIONS : ['.fla']);
       }
       result.assets = [...changed.values()];
+      if (groupByFolder) result.grouping = folderImageGroups.applyFolderImageGroups(state, imageFolders.values());
       return result;
-    }, false);
+      }, false);
+    } catch (error) {
+      for (const file of createdImageFiles) await fs.rm(file, { force: true }).catch(() => {});
+      throw error;
+    }
   }
 
   assignCategory(ids, id) {
@@ -515,7 +655,7 @@ class Library {
       checkCategory(state, id);
       if (!Array.isArray(ids)) throw new Error('请提供素材 ID 列表');
       const assets = [...new Set(ids)].map((assetId) => findAsset(state, assetId));
-      for (const asset of assets) setAssetCategories(asset, id ? [id] : []);
+      for (const asset of assets) { checkAssetCategory(state, asset, id); setAssetCategories(asset, id ? [id] : []); }
       return assets;
     });
   }
@@ -565,6 +705,16 @@ class Library {
     });
   }
 
+  createProject(name) {
+    return this.change(state => {
+      const clean = cleanName(name);
+      checkCategoryName(state, clean, null);
+      const project = { id: randomUUID(), name: clean, parentId: null, pinned: false, scope: 'all', kind: 'project' };
+      state.categories.push(project);
+      return project;
+    });
+  }
+
   renameCategory(id, name, parentId) {
     return this.change((state) => {
       checkCategory(state, id);
@@ -572,10 +722,18 @@ class Library {
       if (!category) throw new Error('分类不存在');
       const clean = cleanName(name);
       const nextParentId = parentId === undefined ? category.parentId : parentId;
+      assertCategoryEditable(category, { name: clean, parentId: nextParentId });
       checkCategory(state, nextParentId);
       assertCategoryMoveScope(state.categories, category, nextParentId);
       if (categoryDescendantIds(state.categories, id).includes(nextParentId)) throw new Error('分类不能移动到自身或子分类，避免循环');
       checkCategoryName(state, clean, nextParentId, id);
+      if (nextParentId !== category.parentId) {
+        const subtree = new Set(categoryDescendantIds(state.categories, id));
+        const projected = { categories: state.categories.map(item => item.id === id ? { ...item, parentId: nextParentId } : item) };
+        for (const asset of state.assets) for (const membership of assetCategoryIds(asset)) {
+          if (subtree.has(membership)) checkAssetCategory(projected, asset, membership);
+        }
+      }
       category.name = clean;
       category.parentId = nextParentId;
       return category;
@@ -597,6 +755,7 @@ class Library {
       checkCategory(state, id);
       const deleted = state.categories.find(category => category.id === id);
       if (!deleted) throw new Error('分类不存在');
+      assertCategoryEditable(deleted, { remove: true });
       const children = state.categories.filter(category => category.parentId === id);
       const occupiedNames = new Set(state.categories.filter(category => category.id !== id && category.parentId === deleted.parentId).map(category => category.name));
       const childNames = new Set(children.map(category => category.name));
@@ -639,7 +798,7 @@ class Library {
         setLiked(asset, patch.liked);
       }
       if ('categoryId' in patch) {
-        checkCategory(state, patch.categoryId);
+        checkAssetCategory(state, asset, patch.categoryId);
         setAssetCategories(asset, patch.categoryId ? [patch.categoryId] : []);
       }
       return assetSnapshot(asset);
@@ -654,6 +813,10 @@ class Library {
       return assetSnapshot(asset, now);
     });
   }
+
+  createSceneGroup(name, ids) { return this.change(state => sceneGroups.createSceneGroup(state, name, ids)); }
+  updateSceneGroup(id, patch) { return this.change(state => sceneGroups.updateSceneGroup(state, id, patch)); }
+  deleteSceneGroup(id) { return this.change(state => sceneGroups.deleteSceneGroup(state, id)); }
 
   removeAssets(ids) {
     return this.change((state) => {
@@ -672,7 +835,7 @@ class Library {
       if (patch.previewPath != null) insidePath(this.root, patch.previewPath);
       if (patch.previewPosterPath != null) insidePath(this.root, patch.previewPosterPath);
       if ('previewStatus' in patch && !['pending', 'ready', 'failed'].includes(patch.previewStatus)) throw new Error('无效的预览状态');
-      if ('previewOrigin' in patch && ![null, 'sidecar', 'rendered'].includes(patch.previewOrigin)) throw new Error('无效的预览来源');
+      if ('previewOrigin' in patch && ![null, 'sidecar', 'rendered', 'custom'].includes(patch.previewOrigin)) throw new Error('无效的预览来源');
       for (const key of ['width', 'height', 'frames', 'frameRate', 'scene', 'frame', 'previewFrameCount', 'previewDurationMs']) {
         if (key in patch && patch[key] !== null && (!Number.isFinite(patch[key]) || patch[key] < 0)) throw new Error('无效的预览尺寸或帧数');
       }
@@ -693,7 +856,13 @@ class Library {
     return this.change((state) => {
       const changes = state.history.pop();
       if (!changes) return false;
+      const systemIds = new Set(state.categories.filter(category => category.systemKey).map(category => category.id));
       for (const change of changes) {
+        if (change.collection === 'categories' && systemIds.has(change.id)) {
+          const previous = change.previous || change.before;
+          if (previous && Object.hasOwn(previous, 'pinned')) state.categories.find(category => category.id === change.id).pinned = Boolean(previous.pinned);
+          continue;
+        }
         const items = state[change.collection];
         const index = items.findIndex((item) => item.id === change.id);
         if (change.previous) {
@@ -716,7 +885,7 @@ class Library {
                 || storagePath(item.managedPath) === storagePath(restored.managedPath)));
             if (existing) {
               mergeRestoredAsset(existing, restored);
-              remapMergedAssetHistory(state.history, change.id, existing.id);
+              remapMergedAssetHistory([...state.history, changes], change.id, existing.id);
             } else items.splice(Math.max(0, Math.min(change.index ?? items.length, items.length)), 0, restored);
           } else if (index >= 0) items[index] = change.before;
           else items.splice(Math.max(0, Math.min(change.index ?? items.length, items.length)), 0, change.before);
@@ -746,4 +915,4 @@ function filterAssets(assets, { query = '', categoryId, categories, favorites = 
   return filtered;
 }
 
-module.exports = { Library, filterAssets, findSidecar, categoryDescendantIds, assetCategoryIds, isLiked, LIKE_DURATION_MS, AUDIO_EXTENSIONS, normalizePreviewResolution, PREVIEW_RESOLUTIONS };
+module.exports = { Library, filterAssets, findSidecar, categoryDescendantIds, assetCategoryIds, isLiked, LIKE_DURATION_MS, AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, normalizePreviewResolution, PREVIEW_RESOLUTIONS };

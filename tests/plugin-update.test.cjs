@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { createPluginUpdater, runInstaller } = require('../desktop/plugin-update.cjs');
-const RUNTIME = ['CSXS/manifest.xml', 'META-INF/signatures.xml', 'mimetype', 'panel.js', 'style.css', 'index.html', 'queue.cjs', 'insert-whole.jsfl', 'icon.png', 'README.md'];
+const RUNTIME = ['CSXS/manifest.xml', 'META-INF/signatures.xml', 'mimetype', 'panel.js', 'style.css', 'index.html', 'import-settings.html', 'queue.cjs', 'insert-whole.jsfl', 'icon.png', 'README.md'];
 async function fixture(t, run) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-plugin-update-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

@@ -1,0 +1,30 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+.root-navigation-shell { min-height: 0; }
+:root[data-layout="classic"] .root-navigation-shell { display: flex; flex-direction: column; flex: 0 0 auto; max-height: min(30vh, 300px); }
+:root[data-layout="classic"] .root-navigation-shell #navigation { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
+:root[data-layout="classic"] .root-navigation-open { flex: 0 0 auto; }
+.root-navigation-scroll { display: none; }
+.root-navigation-open { width: 100%; min-height: 28px; margin: 4px 0 8px; padding: 4px 8px; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; background: var(--surface); white-space: nowrap; }
+:root[data-layout="modern"] .root-navigation-shell { display: flex; flex: 1 1 0; min-width: 0; align-items: center; gap: 3px; height: 34px; }
+:root[data-layout="modern"] .root-navigation-scroll { display: inline-flex; align-items: center; justify-content: center; width: 23px; min-width: 23px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 18px; }
+.root-navigation-scroll[hidden] { display: none !important; }
+.root-navigation-scroll:disabled { opacity: .4; cursor: default; }
+:root[data-layout="modern"] .root-navigation-open { width: auto; flex: 0 0 auto; height: 28px; margin: 0; padding: 4px 7px; }
+#navigation .root-temporary { border: 1px dashed var(--accent); }
+.root-navigation-dialog { width: min(600px, calc(100vw - 36px)); padding: 20px; }
+.root-navigation-dialog .dialog-heading { gap: 12px; margin-bottom: 12px; }
+.root-navigation-dialog h2 { margin-bottom: 4px; font-size: 19px; }
+.root-navigation-dialog .dialog-heading p { margin: 0; color: var(--muted); font-size: 12px; }
+.root-navigation-search { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.root-navigation-search input { width: 100%; min-width: 0; }
+.root-navigation-list { max-height: min(440px, calc(100vh - 265px)); overflow: auto; margin-top: 12px; overscroll-behavior: contain; }
+.root-navigation-row { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.root-navigation-name { flex: 1 1 0; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); }
+.root-navigation-name:hover, .root-navigation-name.is-current { color: var(--violet); background: var(--accent-soft); }
+.root-navigation-pin { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.root-navigation-pin input { margin: 0; accent-color: var(--accent); }
+.root-navigation-order { display: inline-flex; gap: 2px; }
+.root-navigation-order .icon-button { width: 28px; min-width: 28px; height: 28px; padding: 0; font-size: 12px; }
+.root-navigation-order .icon-button:disabled { opacity: .35; }
+.root-navigation-status { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+@media (max-width: 650px) { .root-navigation-dialog { padding: 15px; } .root-navigation-row { gap: 5px; } }

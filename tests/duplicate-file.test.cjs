@@ -80,7 +80,7 @@ test('declining duplication leaves all files and records unchanged and never rev
   const indexBefore = await fs.readFile(path.join(host.root, 'library.json'), 'utf8');
   const assetsBefore = host.library.snapshot().assets;
   assert.deepEqual(await host.api.duplicateInFolder(asset.id), { cancelled: true });
-  assert.deepEqual(confirmations, [{ name: '女主角', directory: path.join(host.root, 'assets'), extension: '.fla' }]);
+  assert.deepEqual(confirmations, [{ name: '女主角', directory: path.join(host.root, 'assets'), extension: '.fla', categoryLabel: '沿用原分类' }]);
   assert.deepEqual((await fs.readdir(base, { recursive: true })).sort(), filesBefore);
   assert.equal(await fs.readFile(path.join(host.root, 'library.json'), 'utf8'), indexBefore);
   assert.deepEqual(host.library.snapshot().assets, assetsBefore);

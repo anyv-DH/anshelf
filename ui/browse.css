@@ -1,0 +1,35 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+.browse { position: relative; flex: 0 0 auto; }
+.has-audio-player .main, :root[data-layout="modern"] .has-audio-player .main { padding-bottom: var(--audio-player-clearance, 85px); }
+.browse-trigger { min-width: 116px; }
+.browse-menu { width: 230px; max-height: calc(100vh - 220px); overflow-y: auto; }
+.browse-menu > strong { display: block; padding: 9px 10px 5px; color: var(--ink); font-size: 11px; font-weight: 600; }
+.browse-custom-size { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px 5px; color: var(--muted); font-size: 11px; }
+.browse-custom-size input { width: 95px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font: inherit; }
+.browse-menu .browse-apply-size { justify-content: center; color: var(--violet); background: var(--accent-soft); }
+.library-toolbar .tools { grid-template-columns: minmax(110px, 1fr) auto auto auto auto auto; }
+.library-toolbar .search { order: 0; }
+.library-toolbar .asset-count { order: 1; }
+.library-toolbar .density { order: 2; }
+.library-toolbar .browse { order: 3; }
+.library-toolbar .filter { order: 4; }
+.library-toolbar .sort { order: 5; }
+.asset-grid[data-browse-mode=fit] { padding-bottom: 0; grid-auto-rows: var(--browse-card-height); align-content: start; }
+.asset-grid[data-browse-mode=fit] .asset-card { display: grid; grid-template-rows: minmax(0, 1fr) 90px; height: var(--browse-card-height); min-height: 0; }
+.asset-grid[data-browse-mode=fit] .card-preview { min-height: 0; height: 100%; aspect-ratio: auto; }
+.asset-grid[data-browse-mode=fit] .card-information { min-height: 0; padding: 7px 8px; }
+.asset-grid[data-browse-mode=fit] .filename-row { height: 18px; margin-bottom: 4px; }
+.asset-grid[data-browse-mode=fit] .filename-row h3 { font-size: 11px; line-height: 18px; }
+.asset-grid[data-browse-mode=fit] .card-information > div { font-size: 10px; }
+.asset-grid[data-browse-mode=fit] .card-actions { grid-template-columns: 1fr 1fr; margin-top: 5px; padding-top: 5px; gap: 4px !important; }
+.asset-grid[data-browse-mode=fit] .card-action { min-height: 26px; height: 26px; padding: 4px 2px; font-size: 10px; gap: 3px; white-space: nowrap; }
+.main:has(> .asset-grid[data-browse-mode=fit]:not(:empty)) { overflow-y: hidden; }
+.main:has(> .asset-grid[data-browse-mode=fit]:not(:empty)) .library-footer { display: none; }
+.main:has(> .asset-grid[data-browse-mode=fit]) .asset-pagination { min-height: 48px; height: 48px; padding: 6px 0; gap: 14px; }
+.main:has(> .asset-grid[data-browse-mode=fit]) .asset-pagination .button { min-height: 30px; height: 30px; padding: 6px 10px; }
+.main:has(> .asset-grid[data-browse-mode=fit]) .asset-pagination small { margin-top: 2px; }
+@container library (max-width: 760px) {
+  .library-toolbar .tools { grid-template-columns: minmax(90px, 1fr) auto auto auto auto; gap: 5px; }
+  .library-toolbar .asset-count { display: none; }
+  .library-toolbar .browse-trigger { min-width: 100px; padding-left: 6px; padding-right: 6px; font-size: 10px; }
+}

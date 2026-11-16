@@ -30,7 +30,7 @@ function panel(t, { documentId = 42, deferProbe = false } = {}) {
   f.queue.heartbeat = (...args) => { heartbeats.push(args); return queueHeartbeat(...args); };
   const button = { disabled: true, attrs: {}, setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(_name, fn) { this.click = fn; } };
   const cep = { getSystemPath: () => '/extension', evalScript(code, callback) {
-    if (code.includes('AnShelfInsertWhole')) { calls.push(code); responses.push(callback); return; }
+    if (code.includes('AnShelfInsertWhole') || code.includes('AnShelfImportImage')) { calls.push(code); responses.push(callback); return; }
     probes.push(code);
     const value = vm.runInNewContext(code, { fl: { getDocumentDOM: () => activeId === null ? null : { id: activeId } } });
     if (deferProbe) responses.probe = (response = value) => callback(response);
@@ -50,7 +50,7 @@ test('receiver heartbeat advertises stage-drop capability and the current numeri
   const f = fixture(t);
   f.queue.heartbeat(false, 42);
   const status = f.queue.read('status.json');
-  assert.deepEqual(status.capabilities, { stageDrop: 1, directSource: 1 });
+  assert.deepEqual(status.capabilities, { stageDrop: 1, directSource: 1, imageImport: 1 });
   assert.equal(status.documentId, 42);
   f.queue.heartbeat(true, null);
   assert.equal(f.queue.read('status.json').documentId, null);
@@ -69,6 +69,15 @@ test('manual request stays on the confirmation button without automatic insertio
   assert.equal(f.calls.length, 1);
   f.respond({ version: 1, ok: true });
   assert.equal(f.queue.pending(), null);
+});
+
+test('image-import automatically uses the image JSFL entry once and reports the result', t => {
+  const f=panel(t), source=path.join(f.root,'assets',f.manual.asset.hash+'.png');
+  fs.copyFileSync(f.manual.asset.sourcePath,source);
+  const r=f.stage({delivery:'image-import',asset:{...f.manual.asset,kind:'image',sourcePath:source}});
+  f.send(r); assert.equal(f.calls.length,1); assert.match(f.calls[0],/AnShelfImportImage/);
+  f.tick();assert.equal(f.calls.length,1);f.respond({version:1,ok:true});
+  assert.equal(f.queue.pending(),null);assert.equal(f.queue.read('result.json').ok,true);
 });
 
 test('fresh stage-drop is prepared and inserted once, and repeat ticks or late callbacks do not insert again', t => {

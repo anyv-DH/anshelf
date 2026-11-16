@@ -2,6 +2,7 @@
 const { BrowserWindow, ipcMain } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { insidePath } = require('../core/files.cjs');
 const { resolveManagedPath } = require('../core/bridge.cjs');
 const { normalizePreviewResolution, previewSide } = require('../core/preview-resolution.cjs');
@@ -93,10 +94,12 @@ function createRenderer(root) {
     });
     if (!result || result.error) throw new Error(result?.error || '预览结果无效');
     const png = imageBytes(result.png, 'png', maxSide);
-    const posterPath = `previews/${asset.id}.png`;
+    // A regeneration must not overwrite bytes retained for preview undo.
+    const cacheStem = `previews/${asset.id}-${randomUUID()}`;
+    const posterPath = `${cacheStem}.png`;
     await safeDestination(root, posterPath);
     await fs.mkdir(path.join(root, 'previews'), { recursive: true });
-    await fs.writeFile(await safeDestination(root, posterPath), png);
+    await fs.writeFile(await safeDestination(root, posterPath), png, { flag: 'wx' });
     let animated = false, gif = null, previewWarning = result.previewWarning ?? warning;
     if (animate && result.previewAnimated === true) {
       try {
@@ -107,8 +110,8 @@ function createRenderer(root) {
         animated = true;
       } catch (_) { previewWarning = '动图输出无效，已保留静态预览'; }
     }
-    const previewPath = animated ? `previews/${asset.id}.gif` : posterPath;
-    if (animated) await fs.writeFile(await safeDestination(root, previewPath), gif);
+    const previewPath = animated ? `${cacheStem}.gif` : posterPath;
+    if (animated) await fs.writeFile(await safeDestination(root, previewPath), gif, { flag: 'wx' });
     return {
       previewPath, previewPosterPath: animated ? posterPath : null,
       previewFormat: animated ? 'gif' : 'png', previewAnimated: animated,

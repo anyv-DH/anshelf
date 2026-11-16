@@ -139,7 +139,7 @@ test('explicit audio reimport applies its folder but recursive or unregistered l
   await fs.writeFile(source, 'audio bytes');
   const original = (await host.api.importPaths([source], { mode: 'audio' })).assets[0];
   const copy = await host.api.duplicateInFolder(original.id);
-  const folder = await host.api.createCategory('音效', null, 'audio');
+  const folder = await host.api.createCategory('副本音效', null, 'audio');
   const imported = await host.api.importPaths([copy.file], { mode: 'audio', categoryId: folder.id });
   assert.equal(imported.assets[0].id, copy.assetId);
   assert.deepEqual(host.library.getAsset(copy.assetId).categoryIds, [folder.id]);

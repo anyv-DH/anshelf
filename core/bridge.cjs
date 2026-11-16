@@ -72,13 +72,22 @@ class Bridge {
     if (typeof asset.id !== 'string' || !/^[\w-]{1,128}$/.test(asset.id)) throw new Error('无效的素材 ID');
     if (typeof asset.name !== 'string' || !asset.name.trim() || asset.name.length > 256) throw new Error('无效的素材名称');
     const sourcePath = resolveManagedPath(this.root, asset.managedPath, 'assets');
-    if (path.extname(sourcePath).toLowerCase() !== '.fla') throw new Error('只能发送 FLA 素材');
+    const image = asset.kind === 'image';
+    if (!(image ? ['.png', '.jpg', '.jpeg'] : ['.fla']).includes(path.extname(sourcePath).toLowerCase())) throw new Error('只能发送 FLA 或已转换的图片素材');
     const previewPath = asset.previewPath ? resolveManagedPath(this.root, asset.previewPath, 'previews') : null;
     const request = {
       version: 2, requestId: crypto.randomUUID(), createdAt: Date.now(), managedRoot: this.root,
       asset: { id: asset.id, hash: asset.hash, name: asset.name.trim(), sourcePath, previewPath }
     };
     const receiver = this.status();
+    if (image) {
+      if (stageTarget !== null) throw new Error('图片请使用导入 AN 或文件拖拽');
+      if (!receiver.connected) throw new Error('AN 面板未连接或未就绪，请打开 AN 接收面板');
+      if (receiver.heartbeat.capabilities?.imageImport !== 1) throw new Error('请安装最新版 AN 面板并关闭后重新打开，当前面板不支持图片导入');
+      if (!Number.isSafeInteger(receiver.heartbeat.documentId) || receiver.heartbeat.documentId < 0) throw new Error('请先打开接收图片的 AN 文档');
+      request.asset.kind = 'image';
+      Object.assign(request, { delivery: 'image-import', expiresAt: request.createdAt + 5000, targetDocumentId: receiver.heartbeat.documentId });
+    }
     if (receiver.connected && receiver.heartbeat.capabilities?.directSource !== 1) throw new Error('请重新安装最新版安安素材管理器 AN 面板，当前面板会额外创建临时素材副本');
     if (receiver.connected && receiver.heartbeat.busy) throw new Error('AN 正在插入，请等待完成后再发送');
     if (stageTarget !== null) {

@@ -1,0 +1,65 @@
+/* Copyright (c) 2026 安屿动画. Licensed under Apache-2.0; see NOTICE. */
+.onboarding-dialog {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.onboarding-dialog[open] { display: block; }
+.onboarding-dialog::backdrop { background: transparent; backdrop-filter: none; }
+.onboarding-spotlight {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--violet);
+  border-radius: 8px;
+  box-shadow: 0 0 0 9999px #10101b99;
+  pointer-events: none;
+}
+.onboarding-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  width: 390px;
+  max-width: calc(100vw - 24px);
+  max-height: min(460px, calc(100vh - 210px));
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 12px 46px #0005;
+}
+.onboarding-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 15px 18px 11px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.onboarding-heading h2 { font-size: 12px; font-weight: 650; margin: 0 0 5px; color: var(--violet); }
+.onboarding-description { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.onboarding-heading .icon-button { flex-shrink: 0; width: 25px; height: 25px; font-size: 21px; }
+.onboarding-workspace { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.onboarding-steps { display: flex; gap: 7px; padding: 11px 18px 0; flex-shrink: 0; }
+.onboarding-step { display: grid; place-items: center; width: 27px; height: 27px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); background: var(--bg); font-size: 11px; }
+.onboarding-step:hover { color: var(--violet); border-color: var(--violet); }
+.onboarding-step[aria-current="step"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 650; }
+.onboarding-content { min-width: 0; min-height: 0; padding: 13px 18px 16px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.onboarding-copy h3 { margin: 5px 0 8px; font-size: 21px; font-weight: 650; line-height: 1.4; }
+.onboarding-copy h3:focus { outline: none; }
+.onboarding-kicker { color: var(--violet); font-size: 11px; line-height: 1.5; margin: 0; }
+.onboarding-lead { margin: 0 0 10px; font-size: 12px; line-height: 1.8; }
+.onboarding-points { display: grid; gap: 6px; padding-left: 17px; margin: 0 0 11px; color: var(--muted); font-size: 12px; line-height: 1.75; }
+.onboarding-points li::marker { color: var(--violet); }
+.onboarding-note { margin: 0; padding: 8px 10px; border-left: 3px solid var(--violet); border-radius: 0 5px 5px 0; background: var(--accent-soft); color: var(--muted); font-size: 11px; line-height: 1.7; }
+.onboarding-start-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.onboarding-footer { display: flex; align-items: center; justify-content: space-between; gap: 7px; flex-shrink: 0; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--surface); }
+.onboarding-progress { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.onboarding-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.onboarding-dialog .button { min-height: 31px; padding: 7px 10px; font-size: 11px; white-space: nowrap; }
+.onboarding-actions .text-button { font-size: 10px; padding: 6px; color: var(--muted); white-space: nowrap; }
+@media (max-height: 500px) { .onboarding-card { max-height: calc(100vh - 24px); } }

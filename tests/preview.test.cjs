@@ -183,3 +183,23 @@ for (const fails of [false, true]) test(`active auto-render ${fails ? 'failure' 
   assert.equal(records[0].previewRevision,'sidecar-revision');
   assert.equal(records[0].previewPath,'previews/hero-sidecar.png');
 });
+
+test('manual preview cancellation removes queued work and a requested retry of the active asset', async () => {
+  const records=[{id:'active',previewStatus:'pending',previewRevision:'old'},{id:'queued',previewStatus:'pending'}];
+  const rendered=[],writes=[];
+  let release,started;
+  const gate=new Promise(resolve=>{release=resolve});
+  const began=new Promise(resolve=>{started=resolve});
+  const library={getAsset:id=>structuredClone(records.find(asset=>asset.id===id)),setPreview:async(id,patch)=>{writes.push(id);Object.assign(records.find(asset=>asset.id===id),patch);}};
+  const queue=new PreviewQueue(library,async asset=>{rendered.push(asset.id);started();await gate;return{previewPath:'previews/old-render.png'};});
+  queue.add(records);await began;
+  queue.add([records[0]],true);
+  Object.assign(records[0],{previewStatus:'ready',previewRevision:'manual',previewPath:'previews/manual.png',previewOrigin:'custom'});
+  try{queue.cancel('active');queue.cancel('queued');}
+  finally{release();}
+  await queue.idle();
+  assert.deepEqual(rendered,['active']);
+  assert.deepEqual(writes,[]);
+  assert.equal(records[0].previewPath,'previews/manual.png');
+  assert.deepEqual(queue.snapshot(),{pending:0,active:null});
+});

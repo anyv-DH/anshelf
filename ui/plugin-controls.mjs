@@ -6,7 +6,7 @@ export function mountPluginControls({ document, api, confirm }) {
   function render() {
     for (const panel of panels()) {
       if (!panel.children.length) {
-        panel.innerHTML = '<div class="plugin-panel-heading"><strong>AN 插件</strong><span data-plugin-state role="status"></span></div><p class="plugin-versions"><span data-plugin-bundled></span><span data-plugin-installed></span></p><p class="plugin-hint">随软件附带，可直接安装或更新，无需另行下载。</p><p class="plugin-restart" data-plugin-restart role="status" hidden>安装已完成。请您关闭并重新打开 AN 中的安安素材管理器面板；必要时保存作品后重启 AN。软件不会自动保存或关闭 AN。</p><p class="plugin-error" data-plugin-error role="alert" hidden></p><button type="button" class="button secondary plugin-install" data-plugin-action="install">安装／更新 AN 插件</button>';
+        panel.innerHTML = '<div class="plugin-panel-heading"><strong>AN 插件</strong><span data-plugin-state role="status"></span></div><p class="plugin-versions"><span data-plugin-bundled></span><span data-plugin-installed></span></p><p class="plugin-hint">随软件附带，可直接安装或更新，无需另行下载。</p><p class="plugin-restart" data-plugin-restart role="status" hidden>安装已完成。请您关闭并重新打开 AN 中的安安素材管理器面板；必要时保存作品后重启 AN。软件不会自动保存或关闭 AN。</p><p class="plugin-error" data-plugin-error role="alert" hidden></p><button type="button" class="button secondary plugin-install" data-plugin-action="install">一键安装／更新 AN 插件</button>';
       }
       const get = selector => panel.querySelector(selector), unsupported = typeof api?.pluginStatus !== 'function' || typeof api?.installPlugin !== 'function';
       const state = installing ? '正在安装 AN 插件…' : loading ? '正在检查…' : unsupported ? '请使用桌面软件' : status?.status === 'current' ? '已是随软件附带的版本' : status?.status === 'needs-update' ? '有新版可更新' : status?.status === 'not-installed' ? '尚未安装' : '暂时无法检查';
@@ -18,7 +18,7 @@ export function mountPluginControls({ document, api, confirm }) {
       get('[data-plugin-error]').textContent = error; get('[data-plugin-error]').hidden = !error;
       const button = get('[data-plugin-action="install"]');
       button.disabled = unsupported || loading || installing || confirming || (status?.status === 'current' && !error);
-      button.textContent = installing ? '正在安装…' : '安装／更新 AN 插件';
+      button.textContent = installing ? '正在安装…' : '一键安装／更新 AN 插件';
     }
   }
   async function load() {
@@ -35,7 +35,7 @@ export function mountPluginControls({ document, api, confirm }) {
     confirming = true;
     let accepted;
     try {
-      accepted = await confirm({ title: '安装／更新 AN 插件', message: '请您确认安装软件已附带的 AN 插件，无需另行下载。\n安装后请关闭并重新打开 AN 中的安安素材管理器面板；必要时保存作品后重启 AN。\n本操作不会自动保存或关闭 AN，也不会修改您的作品。', confirmLabel: '确认安装插件', cancelLabel: '暂不安装' });
+      accepted = await confirm({ title: '一键安装／更新 AN 插件', message: '请您确认安装软件已附带的 AN 插件，无需另行下载。\n安装后请关闭并重新打开 AN 中的安安素材管理器面板；必要时保存作品后重启 AN。\n本操作不会自动保存或关闭 AN，也不会修改您的作品。', confirmLabel: '确认安装插件', cancelLabel: '暂不安装' });
     } finally { confirming = false; }
     if (!accepted || disposed) { render(); return; }
     installing = true; error = ''; restartRequired = false; render();

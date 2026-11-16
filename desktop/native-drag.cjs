@@ -9,7 +9,7 @@ function registerNativeDrag({ ipcMain, webContents, prepareDrag, createIcon, rep
     dragging = true;
     try {
       const descriptor = await prepareDrag(id);
-      if (!descriptor || typeof descriptor.file !== 'string' || descriptor.kind !== 'audio') throw new Error('原生文件拖拽只支持音频，FLA 请使用舞台拖动');
+      if (!descriptor || typeof descriptor.file !== 'string' || !['audio','image'].includes(descriptor.kind)) throw new Error('原生文件拖拽只支持音频和图片，FLA 请使用舞台拖动');
       webContents.startDrag({ file: descriptor.file, icon: createIcon(descriptor.kind) });
     } catch (error) { reportError(String(error.message || '素材无法拖拽').slice(0, 300)); }
     finally { dragging = false; }

@@ -9,11 +9,11 @@ const { _electron } = require(process.env.ANSHELF_PLAYWRIGHT || 'playwright');
 const { Library } = require('../core/library.cjs');
 
 const root = path.resolve(__dirname, '..');
-const runtime = ['CSXS/manifest.xml', 'META-INF/signatures.xml', 'mimetype', 'panel.js', 'style.css', 'index.html', 'queue.cjs', 'insert-whole.jsfl', 'icon.png', 'README.md'];
-const packaged = path.join(root, 'release/win-unpacked');
-const executable = path.join(packaged, '安安素材管理器.exe');
+const runtime = ['CSXS/manifest.xml', 'META-INF/signatures.xml', 'mimetype', 'panel.js', 'style.css', 'index.html', 'import-settings.html', 'queue.cjs', 'insert-whole.jsfl', 'icon.png', 'README.md'];
+const executable = process.env.ANSHELF_UI_EXECUTABLE || path.join(root, 'release/win-unpacked/安安素材管理器.exe');
+const packaged = path.dirname(executable);
 const bundled = path.join(packaged, 'resources/AnimatePlugin');
-const output = path.join(root, 'test-output/plugin-update-packaged');
+const output = process.env.ANSHELF_PLUGIN_OUTPUT || path.join(root, 'test-output/plugin-update-packaged');
 
 async function digest(file) {
   const bytes = await fs.readFile(file), stat = await fs.stat(file);
@@ -56,7 +56,7 @@ async function main() {
   assert.equal(asset.previewStatus, 'ready');
   const originalsBefore = await tree(originals), libraryBefore = await tree(data);
   const version = (await fs.readFile(path.join(bundled, 'CSXS/manifest.xml'), 'utf8')).match(/ExtensionBundleVersion="([\d.]+)"/)[1];
-  const errors = [], nativeDialogs = [], checks = [];
+  const errors = [], nativeDialogs = [], checks = [], contexts = [];
   let app, page;
   async function launch() {
     app = await _electron.launch({
@@ -77,13 +77,24 @@ async function main() {
           throw new Error('Unexpected native dialog during packaged plugin installation: ' + method);
         };
       }
-      return { packaged: app.isPackaged, appData: process.env.APPDATA, data: process.env.ANSHELF_DATA_DIR, appPath: app.getAppPath() };
+      return { packaged: app.isPackaged, managerVersion: app.getVersion(), executable: process.execPath, appData: process.env.APPDATA, data: process.env.ANSHELF_DATA_DIR, profile: app.getPath('userData'), appPath: app.getAppPath() };
     });
     assert.equal(context.packaged, true);
+    assert.equal(context.managerVersion, require('../package.json').version);
+    assert.equal(path.resolve(context.executable).toLowerCase(), path.resolve(executable).toLowerCase(), 'must run the requested packaged executable');
     assert.equal(path.relative(context.appData, appData), '', 'packaged default plugin location must use only isolated AppData');
     assert.equal(path.relative(context.data, data), '');
+    assert.equal(path.relative(context.profile, profile), '');
     assert.match(context.appPath, /app\.asar$/);
-    await page.locator('#app-update').waitFor();
+    contexts.push(context);
+    await page.locator('#workspace-tools > summary').waitFor();
+    if (contexts.length === 1) {
+      await page.locator('#onboarding-dialog[open]').waitFor({ state: 'visible' });
+      await page.locator('#onboarding-dialog [data-onboarding-action="skip"]').click();
+      await page.locator('#onboarding-dialog').waitFor({ state: 'hidden' });
+    }
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('anshelf-onboarding-v1') || 'null')), { status: 'skipped' });
+    assert.equal(await page.locator('#onboarding-dialog').isVisible(), false);
   }
   async function close() {
     if (!app) return;
@@ -91,6 +102,7 @@ async function main() {
     await app.close(); app = null; page = null;
   }
   async function openUpdates() {
+    if (!await page.locator('#app-update').isVisible()) await page.locator('#workspace-tools > summary').click();
     await page.locator('#app-update').click();
     await page.locator('[data-plugin-panel]').waitFor({ state: 'visible' });
   }
@@ -137,7 +149,7 @@ async function main() {
     assert.deepEqual(await tree(data), libraryBefore);
     await page.locator('[data-plugin-panel]').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(output, '03-installed-current.png'), scale: 'css' });
-    checks.push('explicit confirmation executes the real packaged PowerShell installer; all ten signed runtime files match release resources byte for byte');
+    checks.push('explicit confirmation executes the real packaged PowerShell installer; all eleven signed runtime files match release resources byte for byte');
     checks.push('original FLA, preview and isolated library retain identical bytes, timestamps and membership; no Animate document was opened or closed');
 
     await close(); await launch(); await openUpdates();
@@ -152,7 +164,7 @@ async function main() {
     assert.deepEqual(await tree(originals), originalsBefore);
     assert.deepEqual(await tree(data), libraryBefore);
     assert.deepEqual(errors, []); assert.deepEqual(nativeDialogs, []);
-    const report = { passed: true, version, packagedExecutable: executable, mockedPluginIpc: false, mockedInstaller: false, checks, pageErrors: errors, nativeDialogs };
+    const report = { passed: true, version, managerVersion: contexts[0].managerVersion, packagedExecutable: executable, contexts, mockedPluginIpc: false, mockedInstaller: false, checks, pageErrors: errors, nativeDialogs };
     await fs.writeFile(path.join(output, 'result.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
   } catch (error) {

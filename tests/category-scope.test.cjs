@@ -46,7 +46,7 @@ test('scope validation refuses corrupt scoped trees and cross-scope moves', () =
 
 test('scoped roots and inherited children persist through reopen while sibling names stay unique', async t => {
   const { root, library } = await fixture(t);
-  assert.ok(library.snapshot().categories.every(category => category.scope === 'all'));
+  assert.ok(library.snapshot().categories.every(category => ['ordinary', 'effect', 'audio'].includes(category.scope)));
   const parent = await library.createCategory('特效分类测试', null, 'effect');
   const child = await library.createCategory('冲击', parent.id, 'audio');
   const grandchild = await library.createCategory('火焰', child.id);
@@ -82,8 +82,8 @@ test('scoped classification changes category metadata without changing the asset
   const originals = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-category-original-'));
   t.after(() => fs.rm(originals, { recursive: true, force: true }));
   const source = path.join(originals, 'original.fla');
-  await fs.writeFile(source, 'isolated effect source');
-  const asset = (await library.importPaths([source], { mode: 'effect' })).assets[0];
+  await fs.writeFile(source, 'isolated ordinary source');
+  const asset = (await library.importPaths([source], { mode: 'ordinary' })).assets[0];
   const parent = await library.createCategory('普通作用域测试', null, 'ordinary');
   const child = await library.createCategory('分类', parent.id);
   await library.assignCategory([asset.id], child.id);
@@ -92,10 +92,10 @@ test('scoped classification changes category metadata without changing the asset
   await library.deleteCategory(child.id);
   await library.undo();
   const reopened = await Library.open(root);
-  assert.equal(reopened.getAsset(asset.id).assetType, 'effect');
+  assert.equal(reopened.getAsset(asset.id).assetType, 'ordinary');
   assert.equal(reopened.getAsset(asset.id).categoryId, child.id);
-  assert.equal(await fs.readFile(source, 'utf8'), 'isolated effect source');
-  assert.equal(await fs.readFile(reopened.assetPath(asset.id), 'utf8'), 'isolated effect source');
+  assert.equal(await fs.readFile(source, 'utf8'), 'isolated ordinary source');
+  assert.equal(await fs.readFile(reopened.assetPath(asset.id), 'utf8'), 'isolated ordinary source');
 });
 
 test('category deletion and legacy undo preserve scopes across reopening without rewriting old files on read', async t => {

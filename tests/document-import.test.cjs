@@ -35,7 +35,7 @@ test('AN current-document request is consumed once, acknowledged, and leaves ori
   assert.equal(f.queue.documentImportResult(request.requestId), null);
 });
 
-test('receiver watches new descriptors and processes them serially without a polling timer', async t => {
+test('receiver watches new descriptors and processes them serially before the recovery deadline', async t => {
   let active = 0, peak = 0;
   const f = await fixture(t, async () => {
     peak = Math.max(peak, ++active);
@@ -270,6 +270,74 @@ test('plugin reads category choices and an existing managed effect defaults with
   await fs.writeFile(index, '{broken');
   assert.throws(() => queue.documentImportSettings(file), /分类|素材库/);
   assert.equal(await fs.readFile(index, 'utf8'), '{broken');
+});
+
+function preferenceStorage(initial = null) {
+  let value = initial;
+  return {
+    getItem() { return value; },
+    setItem(key, next) { value = next; },
+    get value() { return value; }
+  };
+}
+
+test('AN import preview habits survive a reopened queue separately for ordinary and effect without remembering categories or type', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-plugin-habits-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const storage = preferenceStorage(), first = new Queue(root);
+  assert.equal(first.rememberDocumentImportOptions({ mode: 'ordinary', categoryId: 'people', previewResolution: 2048, preferExistingPreview: false }, storage), true);
+  assert.equal(first.rememberDocumentImportOptions({ mode: 'effect', categoryId: 'effects', previewResolution: 512, preferExistingPreview: true }, storage), true);
+  const reopened = new Queue(root), choices = reopened.documentImportSettings(null, storage);
+  assert.deepEqual(choices.defaults, { mode: 'ordinary', categoryId: null, previewResolution: 2048, preferExistingPreview: false });
+  assert.deepEqual(choices.preferences, { ordinary: { previewResolution: 2048, preferExistingPreview: false }, effect: { previewResolution: 512, preferExistingPreview: true } });
+  assert.equal(choices.matchedAsset, false);
+  const saved = JSON.parse(storage.value);
+  assert.deepEqual(saved, { version: 1, ordinary: { previewResolution: 2048, preferExistingPreview: false }, effect: { previewResolution: 512, preferExistingPreview: true } });
+  for (const previewResolution of [null, 256, 512, 1024, 2048]) {
+    reopened.rememberDocumentImportOptions({ mode: 'ordinary', previewResolution, preferExistingPreview: true }, storage);
+    assert.equal(new Queue(root).documentImportSettings(null, storage).defaults.previewResolution, previewResolution);
+  }
+  assert.equal(await fs.stat(path.join(root, 'library.json')).then(() => true, error => error.code === 'ENOENT' ? false : Promise.reject(error)), false);
+});
+
+test('existing AN asset classification and resolution take precedence over remembered habits without changing the index', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-plugin-habit-defaults-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const queue = new Queue(root), storage = preferenceStorage(), file = path.join(root, 'assets', 'known', 'known.fla');
+  queue.rememberDocumentImportOptions({ mode: 'ordinary', previewResolution: 2048, preferExistingPreview: true }, storage);
+  queue.rememberDocumentImportOptions({ mode: 'effect', previewResolution: 256, preferExistingPreview: false }, storage);
+  const index = path.join(root, 'library.json');
+  const metadata = { version: 1, categories: [{ id: 'effects', name: '特效', parentId: null, scope: 'effect' }], assets: [{ id: 'known', kind: 'fla', assetType: 'effect', categoryId: 'effects', managedPath: path.relative(root, file), sourcePaths: [], previewResolution: 1024 }] };
+  await fs.writeFile(index, JSON.stringify(metadata));
+  const before = await fs.readFile(index), choices = queue.documentImportSettings(file, storage);
+  assert.deepEqual(choices.defaults, { mode: 'effect', categoryId: 'effects', previewResolution: 1024, preferExistingPreview: false });
+  assert.equal(choices.matchedAsset, true);
+  assert.deepEqual(await fs.readFile(index), before);
+  metadata.assets[0].previewResolution = null;
+  await fs.writeFile(index, JSON.stringify(metadata));
+  assert.equal(queue.documentImportSettings(file, storage).defaults.previewResolution, null);
+});
+
+test('AN import habit storage corruption and unavailable CEP storage leave safe usable defaults', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anshelf-plugin-habit-storage-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const queue = new Queue(root);
+  const baseline = { ordinary: { previewResolution: null, preferExistingPreview: true }, effect: { previewResolution: null, preferExistingPreview: true } };
+  for (const raw of ['{broken', 'null', '[]', JSON.stringify({ version: 2, ordinary: { previewResolution: 2048, preferExistingPreview: false } }), 'x'.repeat(5000)]) {
+    assert.deepEqual(queue.documentImportPreferences(preferenceStorage(raw)), baseline);
+  }
+  const badFields = preferenceStorage(JSON.stringify({ version: 1, ordinary: { previewResolution: 4096, preferExistingPreview: 'no', categoryId: 'people' }, effect: { previewResolution: 2048, preferExistingPreview: false } }));
+  assert.deepEqual(queue.documentImportPreferences(badFields), { ordinary: baseline.ordinary, effect: { previewResolution: 2048, preferExistingPreview: false } });
+  for (const storage of [null, {}, () => { throw new Error('storage is unavailable'); }, { getItem() { throw new Error('read denied'); }, setItem() { throw new Error('write denied'); } }]) {
+    assert.deepEqual(queue.documentImportPreferences(storage), baseline);
+    assert.deepEqual(queue.documentImportSettings(null, storage).defaults, { mode: 'ordinary', categoryId: null, ...baseline.ordinary });
+    assert.equal(queue.rememberDocumentImportOptions({ mode: 'ordinary', previewResolution: 2048, preferExistingPreview: false }, storage), false);
+  }
+  const storage = preferenceStorage();
+  assert.throws(() => queue.rememberDocumentImportOptions({ mode: 'audio', previewResolution: 2048, preferExistingPreview: false }, storage), /类型/);
+  assert.equal(storage.value, null);
+  assert.throws(() => queue.rememberDocumentImportOptions({ mode: 'ordinary', previewResolution: 4096, preferExistingPreview: false }, storage), /分辨率/);
+  assert.equal(storage.value, null);
 });
 
 test('read-only JSFL document inspection binds document id and displays the current file before any confirmation or save', async () => {

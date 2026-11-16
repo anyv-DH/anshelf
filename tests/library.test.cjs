@@ -53,7 +53,7 @@ test('recursively imports FLAs without changing originals and deduplicates bytes
   assert.deepEqual(result.failed, []);
   const snapshot = library.snapshot();
   assert.equal(snapshot.assets.length, 2);
-  assert.deepEqual(snapshot.categories.map((c) => c.name), ['武器', '人物', '背景', '特效', '道具']);
+  assert.deepEqual(snapshot.categories.filter(category => category.parentId === null).map(category => category.name), ['人物', '背景', '表情', '道具', '特效', '动物异兽', '音效', 'BGM']);
   const deduplicated = snapshot.assets.find((a) => a.sourcePaths.length === 2);
   assert.equal(deduplicated.hash.length, 64);
   assert.equal(deduplicated.previewStatus, 'pending');
@@ -227,7 +227,7 @@ test('validates metadata mutations and keeps preview completion across category 
   const asset = (await library.importPaths([source])).assets[0];
   await library.updateAsset(asset.id, { name: '新名字', tags: ['a', ' a ', 'b'], favorite: true });
   assert.deepEqual(library.getAsset(asset.id).tags, ['a', 'b']);
-  const category = library.snapshot().categories[0];
+  const category = library.snapshot().categories.find(item => item.systemKey === 'character');
   await library.assignCategory([asset.id], category.id);
   await library.setPreview(asset.id, { previewStatus: 'ready', previewPath: 'previews/a.png', width: 80, height: 100, frames: 1, previewOrigin: 'rendered' });
   await library.undo();
@@ -271,7 +271,7 @@ test('invalid batch assignment rolls back completely and the queue remains usabl
   const { sources, root, library } = await fixture(t);
   await fs.writeFile(path.join(sources, 'a.fla'), 'a');
   const asset = (await library.importPaths([sources])).assets[0];
-  const category = library.snapshot().categories[0];
+  const category = library.snapshot().categories.find(category => category.systemKey === 'character');
   await assert.rejects(library.assignCategory([asset.id, 'missing'], category.id), /素材不存在/);
   assert.equal(library.getAsset(asset.id).categoryId, null);
   await assert.rejects(library.createCategory('   '), /名称/);
@@ -298,8 +298,11 @@ test('invalid or escaping persisted metadata is rejected without overwriting it'
 
 test('undoing category deletion restores its position in the category list', async (t) => {
   const { library } = await fixture(t);
+  await library.createCategory('顺序一');
+  const middle = await library.createCategory('顺序二');
+  await library.createCategory('顺序三');
   const before = library.snapshot().categories;
-  await library.deleteCategory(before[1].id);
+  await library.deleteCategory(middle.id);
   await library.undo();
   assert.deepEqual(library.snapshot().categories, before);
 });

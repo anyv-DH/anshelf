@@ -145,7 +145,7 @@ test('desktop integrates streaming media, safe poster lookup, mode filters and a
   }
   const host = { api: { prepareDrag: async () => ({ file: '/private/known.mp3', kind: 'audio' }) }, library };
   const electron = { app, BrowserWindow: FakeWindow, dialog: { showOpenDialog: async (_win, options) => { picked.push(options); return { canceled: true, filePaths: [] }; }, showErrorBox: (_title, message) => { throw new Error(message); } },
-    ipcMain: { handle(channel, handler) { if (channel === 'shelf:call') callHandler = handler; }, on(_channel, handler) { dragHandler = handler; }, removeListener() {} },
+    ipcMain: { handle(channel, handler) { if (channel === 'shelf:call') callHandler = handler; }, on(_channel, handler) { dragHandler = handler; }, removeListener() {}, removeHandler() {} },
     protocol: { registerSchemesAsPrivileged(value) { privileged = value; }, handle(_scheme, handler) { protocolHandler = handler; } },
     session: { defaultSession: { webRequest: { onBeforeRequest() {} } } }, shell: {}, nativeImage: { createFromPath: () => ({ resize: () => ({ size: 32 }) }) },
     net: { fetch: async url => { fetched.push(url); return new Response('poster-fixture'); } },

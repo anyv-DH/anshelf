@@ -7,7 +7,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
-const runtimeFiles = ['index.html', 'style.css', 'icon.png', 'panel.js', 'queue.cjs', 'insert-whole.jsfl', 'README.md', 'CSXS/manifest.xml'];
+const runtimeFiles = ['index.html', 'import-settings.html', 'style.css', 'icon.png', 'panel.js', 'queue.cjs', 'insert-whole.jsfl', 'README.md', 'CSXS/manifest.xml'];
 const signedFiles = [...runtimeFiles, 'mimetype', 'META-INF/signatures.xml'];
 
 function fixture(t, { signed = true } = {}) {

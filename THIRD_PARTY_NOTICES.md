@@ -25,6 +25,6 @@ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH RE
 
 Dependency package licenses are retained in the installed runtime. Build tooling (esbuild and electron-builder) is not needed by the user. Original demo artwork and the AnShelf UI are created for this project.
 
-The AnAn wordmark in ui/brand-anan.svg is original geometric vector artwork drawn for this project. It is not converted from a font and embeds no third-party font. It may be used and modified commercially with this project without a separate font license.
+The AN mark in ui/brand-anan.svg was supplied by the project maintainer for use in AnShelf and is retained as vector artwork. It is not presented as newly created project artwork. Project attribution is described in NOTICE and COMMERCIAL-ATTRIBUTION.md; the mark's inclusion does not grant separate rights to third-party branding.
 
 Copies of JSZip, pako, gifenc and Electron licenses are provided in resources/licenses. Chromium/Node.js notices are supplied by Electron's LICENSES.chromium.html. The upstream FLA parser package and README declarations are included in the source delivery.

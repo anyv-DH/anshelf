@@ -271,7 +271,7 @@ test('revealInFolder uses native filesystem visibility instead of Electron virtu
   const module = { exports: {} };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, '../desktop/host.cjs'), 'utf8'), {
     module, __dirname: path.join(__dirname, '../desktop'), process: { versions: { electron: '44.7.0' } },
-    require: name => name === 'node:fs/promises' ? electronFs : name === 'original-fs' ? nativeFs : name === './host-sync.cjs' ? require('../desktop/host-sync.cjs') : require(name),
+    require: name => name === 'node:fs/promises' ? electronFs : name === 'original-fs' ? nativeFs : name.startsWith('./') ? require('../desktop/' + name.slice(2)) : require(name),
   });
   const host = await module.exports.createHost({ root: path.join(base, 'library'), render: async () => ({ previewPath: null }), revealFile: async file => { revealed.push(file); } });
   await host.api.importPaths([source]);
@@ -384,12 +384,13 @@ test('desktop control API accepts only fixed themes and window actions', async t
   const host = await createHost({ root, render: async () => ({}), setTheme: async theme => { themes.push(theme); return theme; }, windowAction: async action => { actions.push(action); return { maximized: action === 'maximize' }; } });
   assert.equal(await host.api.setTheme('warm'), 'warm');
   assert.equal(await host.api.setTheme('dark'), 'dark');
+  for (const theme of ['paper', 'slate', 'sage', 'bluewhite']) assert.equal(await host.api.setTheme(theme), theme);
   assert.deepEqual(await host.api.windowAction('maximize'), { maximized: true });
   await host.api.windowAction('minimize');
   await host.api.windowAction('close');
   for (const invalid of ['light', '', {}, null]) await assert.rejects(host.api.setTheme(invalid), /主题/);
   for (const invalid of ['restore', '', {}, null]) await assert.rejects(host.api.windowAction(invalid), /窗口/);
-  assert.deepEqual(themes, ['warm', 'dark']);
+  assert.deepEqual(themes, ['warm', 'dark', 'paper', 'slate', 'sage', 'bluewhite']);
   assert.deepEqual(actions, ['maximize', 'minimize', 'close']);
 });
 
@@ -418,7 +419,7 @@ test('desktop IPC rejects non-string method names before property-key coercion',
   }
   let imports = 0;
   const api = { snapshot: async () => 'snapshot-ok', revealInFolder: async id => ({ location: 'original', id }), importPaths: async () => { imports++; return true; } };
-  const electron = { app, BrowserWindow: FakeWindow, dialog: { showErrorBox: (title, error) => { throw new Error(title + error); } }, ipcMain: { on() {}, handle: (channel, callback) => { if (channel === 'shelf:call') handler = callback; else assert.ok(['shelf:update-check', 'shelf:update-open', 'shelf:project-open', 'shelf:getSkin', 'shelf:selectSkin', 'shelf:updateSkin', 'shelf:resetSkin', 'shelf:plugin-status', 'shelf:plugin-install', 'shelf:update-download', 'shelf:update-cancel', 'shelf:update-launch', 'shelf:update-reveal'].includes(channel)); } }, protocol: { registerSchemesAsPrivileged() {}, handle() {} }, session: { defaultSession: { webRequest: { onBeforeRequest() {} } } }, shell: {}, nativeImage: {}, net: {} };
+  const electron = { app, BrowserWindow: FakeWindow, dialog: { showErrorBox: (title, error) => { throw new Error(title + error); } }, ipcMain: { on() {}, handle: (channel, callback) => { if (channel === 'shelf:call') handler = callback; else assert.ok(['shelf:update-check', 'shelf:update-open', 'shelf:project-open', 'shelf:getSkin', 'shelf:selectSkin', 'shelf:updateSkin', 'shelf:resetSkin', 'shelf:plugin-status', 'shelf:plugin-install', 'shelf:update-download', 'shelf:update-cancel', 'shelf:update-launch', 'shelf:update-reveal', 'shelf:chooseImportFiles', 'shelf:chooseImportFolder', 'shelf:stage-dropped-files', 'shelf:importSelectedPaths', 'shelf:cancelImportSelection'].includes(channel)); } }, protocol: { registerSchemesAsPrivileged() {}, handle() {} }, session: { defaultSession: { webRequest: { onBeforeRequest() {} } } }, shell: {}, nativeImage: {}, net: {} };
   const context = { require: name => name === 'electron' ? electron : name === './host.cjs' ? { createHost: async () => ({ api, library: {} }) } : name === './skin.cjs' ? { createSkinController: async () => ({}) } : name === './document-import.cjs' ? { createDocumentImportReceiver: async () => ({ close() {} }) } : name === './previews.cjs' ? { createRenderer: () => async () => ({}) } : name === './gif-poster.cjs' ? { createGifPoster: () => async () => true } : name.startsWith('./') ? require('../desktop/' + name.slice(2)) : require(name), __dirname: path.join(__dirname, '../desktop'), process: { env: {}, resourcesPath: 'C:\\resources' }, URL, Response };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, '../desktop/main.cjs'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
@@ -471,10 +472,18 @@ test('frameless desktop callbacks apply theme, window controls and propagate nat
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(options.frame, false);
   assert.equal(options.title, '安安素材管理器');
+  for(const mode of [['image'],{},true,null]){
+    await assert.rejects(callbacks.pickFiles({mode}),/模式/);
+    await assert.rejects(callbacks.pickFolder({mode}),/模式/);
+  }
   assert.equal(await callbacks.setTheme('warm'), 'warm');
   assert.match(window.color, /^#[a-f0-9]{6}$/i);
   assert.equal(await callbacks.setTheme('dark'), 'dark');
   assert.notEqual(window.color, '#ffffff');
+  for (const [theme, background] of Object.entries({ dark: '#171520', warm: '#f7f1e9', paper: '#f4f5f7', slate: '#191f27', sage: '#f0f4f1', bluewhite: '#ffffff' })) {
+    assert.equal(await callbacks.setTheme(theme), theme);
+    assert.equal(window.color, background);
+  }
   assert.equal(await callbacks.compact(), true);
   assert.equal(window.topmost, true);
   assert.equal((await callbacks.windowAction('maximize')).maximized, true);
